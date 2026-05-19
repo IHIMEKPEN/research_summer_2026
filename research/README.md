@@ -29,6 +29,8 @@ Camera ──→ OpenVLA 7B ──→ ESN Reservoir ──→ W_out ──→ G1
 research/
 ├── README.md
 ├── pyproject.toml
+├── requirements.txt             ← mock / CPU stack
+├── requirements-gpu.txt         ← OpenVLA + CUDA PyTorch (pinned)
 ├── src/                         ← import as `src.step1_profile_openvla`, etc.
 │   ├── step1_profile_openvla.py
 │   ├── step1_baseline_comparison.py
@@ -48,10 +50,30 @@ research/
 
 ### 1. Set up the environment (run once on HPC)
 
+**Mock / CPU-only scripts:**
+
 ```bash
-bash step1_setup_env.sh
+cd research
+pip install -r requirements.txt
+```
+
+**OpenVLA real profiling (NVIDIA GPU, CUDA 12.1):**
+
+```bash
+cd research
+python3 -m venv .venv && source .venv/bin/activate   # recommended on Ubuntu
+pip install -U pip
+pip install -r requirements-gpu.txt
+```
+
+Or use the full conda setup script:
+
+```bash
+bash src/step1_setup_env.sh
 conda activate openvla_g1
 ```
+
+See `requirements-gpu.txt` for pinned versions (`transformers==4.40`, `timm<1.0`, `pillow>=10`, etc.).
 
 ### 2. Run any script in mock mode (no GPU needed)
 

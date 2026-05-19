@@ -27,11 +27,10 @@ conda activate openvla_g1
 
 # ── 2. Core ML dependencies ─────────────────────────────────
 echo ""
-echo "[2] Installing PyTorch + HuggingFace stack..."
-pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
-pip install transformers==4.40.0 accelerate==0.29.0 bitsandbytes==0.43.0
-pip install sentencepiece timm einops
-pip install huggingface_hub datasets
+echo "[2] Installing PyTorch + HuggingFace stack (requirements-gpu.txt)..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+pip install -r "${SCRIPT_DIR}/../requirements-gpu.txt"
+pip install datasets
 
 # ── 3. OpenVLA ───────────────────────────────────────────────
 echo ""

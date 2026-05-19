@@ -201,23 +201,28 @@ class OpenVLAWrapper:
             return self._mock_infer(image, instruction)
 
         from PIL import Image as PILImage
+
         pil_img = PILImage.fromarray(image)
-        inputs = self.processor(pil_img, instruction, return_tensors="pt").to("cuda:0")
+        # OpenVLA processor: (text, image) — not (image, text)
+        prompt = f"In: What action should the robot take to {instruction}?\nOut:"
+        inputs = self.processor(prompt, pil_img, return_tensors="pt")
+        inputs = inputs.to("cuda:0", dtype=torch.bfloat16)
         input_len = inputs["input_ids"].shape[-1]
 
         with torch.no_grad():
-            action_ids = self.model.predict_action(
+            action = self.model.predict_action(
                 **inputs, unnorm_key="bridge_orig", do_sample=False
             )
 
-        action = self.processor.decode_actions(action_ids)
-        # Resize to G1 DOF if necessary
+        action = np.asarray(action, dtype=np.float32).flatten()
+        output_tok = self.model.get_action_dim("bridge_orig")
+        # Resize to G1 DOF if necessary (OpenVLA bridge_orig is 7-DoF)
         if len(action) < self.action_dim:
             action = np.pad(action, (0, self.action_dim - len(action)))
         else:
             action = action[:self.action_dim]
 
-        return action, input_len, action_ids.shape[-1]
+        return action, input_len, output_tok
 
     def _mock_infer(self, image: np.ndarray, instruction: str) -> Tuple[np.ndarray, int, int]:
         """Simulate latency + output format without loading the 7B model."""
