@@ -1,0 +1,38 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.claude/
+*.swp
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Research outputs (regenerate locally)
+research/results/
+research/models/
+
+# OpenVLA upstream clone (install separately — see README)
+research/openvla/
+
+# LaTeX build artifacts
+papers/**/*.aux
+papers/**/*.log
+papers/**/*.bbl
+papers/**/*.blg
+papers/**/*.out
+papers/**/*.fdb_latexmk
+papers/**/*.fls
+papers/**/*.synctex.gz
+
+# Misc caches
+others/__pycache__/
