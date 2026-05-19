@@ -1,0 +1,81 @@
+% ICRA 2026 contributed paper (IEEE RAS).
+% Contributed papers: hard 8-page ceiling including references, figures, tables,
+% and acknowledgments (see https://2026.ieee-icra.org/ final instructions).
+% Submit via PaperPlaza (ras.papercept.net). Clear headers/footers for stamps on
+% camera-ready if instructed by the publication chair.
+
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+% For camera-ready: \usepackage{balance} and \balance immediately before
+% \bibliography often helps equalize the last page's two columns (ICRA checks layout).
+
+\begin{document}
+
+\title{Bridging the Proprioceptive Gap: High-Frequency Humanoid Control via OpenVLA and Reservoir Computing}
+
+\author{\IEEEauthorblockN{Osemudiamen Andrew Ihimekpen}
+\IEEEauthorblockA{\textit{Dept. of Electrical and Computer Engineering} \\
+\textit{CREDIT Center at Prairie View A\&M University}\\
+Prairie View, TX, USA\\
+oihimekpen@pvamu.edu}
+\and
+\IEEEauthorblockN{Lijun Qian}
+\IEEEauthorblockA{\textit{Dept. of Electrical and Computer Engineering} \\
+\textit{CREDIT Center at Prairie View A\&M University}\\
+Prairie View, TX, USA\\
+liqian@pvamu.edu}}
+
+\maketitle
+
+\begin{abstract}
+While Vision-Language-Action (VLA) models have revolutionized semantic robot reasoning, their application to humanoid locomotion remains limited by high inference latency and the inability to handle 100Hz+ control loops. This paper identifies the ``Quantization Trap'' in existing VLAs and proposes a hybrid architecture utilizing Echo State Networks (ESNs). Our approach leverages INT4-quantized OpenVLA for high-level task planning while employing a tuned reservoir to manage the nonlinear dynamics of a Unitree G1 robot under the DIRT (Difference between real world and Ideal physics) framework. Our objective is to demonstrate that this unified controller can maintain stability in complex tasks without the need for traditional body-controller decoupling.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Vision-language-action models, humanoid robots, echo state networks, reservoir computing, whole-body control
+\end{IEEEkeywords}
+
+\section{Introduction}
+The emergence of foundation models such as OpenVLA \cite{OpenVLA2025} and $\pi_0$ \cite{Preprints2026} has enabled robots to perform open-vocabulary tasks. However, these models are primarily designed for tabletop manipulation and often fail when applied to bipedal locomotion due to the ``Physical AI'' paradox: the demand for millisecond-level decision-making in unforgiving environments \cite{PhysicalAI2026}.
+
+A significant challenge is the latency of autoregressive action generation, which introduces jitter in high-DOF systems. We therefore propose integrating Echo State Networks (ESNs), a form of Reservoir Computing, as a high-frequency temporal buffer. This design allows the VLA to provide ``intent'' while the ESN is expected to provide ``reflexive'' stability.
+
+\section{Related Work}
+Recent reviews indicate that bimanual and whole-body coordination are the most demanding testbeds for VLAs \cite{VLA_Review2026}. While some approaches use flow matching to improve speed \cite{Preprints2026}, recurrent policies like xLSTM have shown better success in memory-dependent long-horizon tasks \cite{Notes2Self2026}. Our work extends this by utilizing physical reservoir dynamics to handle the sudden perturbations inherent in humanoid walking.
+
+\section{Methodology}
+\subsection{System Architecture}
+Our system does not decouple the upper and lower body. Instead, it treats the robot as a unified dynamical system.
+\begin{itemize}
+    \item \textbf{Perception Layer:} INT4-quantized OpenVLA processes RGB-D input to identify the specified task parameters.
+    \item \textbf{Control Layer:} An ESN reservoir, initialized with a spectral radius $\rho < 1$, transforms VLA tokens into continuous joint velocities.
+    \item \textbf{Sim-to-Real Consistency Layer:} The DIRT (Difference between real world and Ideal physics) framework parameterizes the discrepancy between simulator dynamics and measured robot behavior for controller tuning.
+\end{itemize}
+
+\section{Experimental Evaluation}
+This section defines the planned evaluation protocol and reporting structure for ICRA (e.g., task success, tracking error, latency, and ablations vs.\ VLA-only or decoupled control). All figures, tables, and discussion remain within the eight-page proceedings limit together with references and acknowledgments.
+
+\subsection{Experimental Setup}
+Describe the Unitree G1 platform, sensors, control rates, training and inference hardware, and reproducibility details (random seeds, hyperparameters, and code or data release plans if applicable).
+
+\subsection{Anticipated Results and Evaluation Plan}
+We will report quantitative comparisons to prior methods and analyze expected failure modes, limitations, and operating regimes where the hybrid VLA--ESN controller is likely to be preferred.
+
+\subsection{Metrics and Baselines}
+Validation is planned over 50 trials using $\pm 15$N lateral impulse perturbations on Unitree G1. We will compare against a pure-VLA baseline and a decoupled whole-body control baseline, and we will report task success rate, perturbation recovery time, COM tracking error, and end-to-end control latency. We target an effective control frequency of 100 Hz and an expected success rate exceeding the 30\% pure-VLA baseline.
+
+\section{Conclusion}
+This preliminary paper presents a proposed hybrid OpenVLA--ESN framework for high-frequency, whole-body humanoid control under DIRT-guided sim-to-real adaptation. Upon successful completion of the planned experiments, we expect this framework to clarify how to bridge the current 20--50$\times$ frequency gap between VLA inference and stable humanoid control, while informing future formal analysis of the coupled planner--reservoir loop.
+
+\section*{Acknowledgment}
+This work was supported in part by the ARO Cooperative Agreement W911NF-24-2-0133.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

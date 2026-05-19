@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "g1-openvla-research"
+version = "0.1.0"
+description = "OpenVLA profiling and ESN bridge research for Unitree G1"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pandas",
+    "tqdm",
+    "torch",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[project.scripts]
+step1-profile-openvla = "src.step1_profile_openvla:main"
