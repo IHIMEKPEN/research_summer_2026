@@ -1,0 +1,36 @@
+# OpenVLA real profiling on NVIDIA GPU (CUDA 12.1 wheels).
+#
+# Tested: Python 3.10, Tesla V100 32GB, Ubuntu 22.04.
+#
+#   cd research
+#   python3 -m venv .venv && source .venv/bin/activate   # recommended
+#   # Ubuntu venv: sudo apt install python3.10-venv
+#   pip install -U pip
+#   pip install -r requirements-gpu.txt
+#
+# If system packages shadow user installs (old Pillow/matplotlib on Ubuntu),
+# always use a venv or `pip install --user` and verify:
+#   python -c "import PIL; print(PIL.__version__, PIL.__file__)"
+
+-r requirements.txt
+
+# PyTorch (CUDA 12.1) — must use PyTorch wheel index
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+
+# HuggingFace + OpenVLA (openvla/openvla-7b)
+transformers==4.40.1
+accelerate==0.29.0
+huggingface-hub>=0.19.3,<1.0
+tokenizers>=0.19,<0.20
+safetensors>=0.4.1
+
+# OpenVLA runtime deps (timm 1.x breaks model load)
+timm>=0.9.10,<1.0.0
+sentencepiece>=0.2.0
+einops>=0.7.0
+pillow>=10.0
+
+# INT4 quantisation when VRAM < 13 GB (--use_int4)
+bitsandbytes>=0.43.0,<0.50
