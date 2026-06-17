@@ -18,13 +18,14 @@ Task:
 
 Usage:
   python3 -m src.step1_profile_unifolm_vla0 --n_trials 100 --mock
-  python3 -m src.step1_profile_unifolm_vla0 --n_trials 100 --model unitreerobotics/UnifoLM-VLM-Base
+  python3 -m src.step1_profile_unifolm_vla0 --n_trials 100 --model unitreerobotics/UnifoLM-VLA-Base
 """
 
 import argparse
 import json
 import logging
 import re
+import sys
 import time
 import warnings
 from contextlib import nullcontext
@@ -40,6 +41,7 @@ import torch
 from tqdm import tqdm
 
 from src.paths import results_path
+from src.unifolm_cuda_graph import VLACUDAGraphEngine, cuda_free_mib
 from src.unifolm_vla_runtime import AsyncVLARuntime, GPUActionRegister, PinnedHostTransfer
 
 warnings.filterwarnings("ignore")
@@ -164,7 +166,7 @@ class MockG1CleanTableEnv:
         return img
 
 
-# UnifoLM-VLM-Base is Qwen2.5-VL (config: transformers>=4.49). OpenVLA uses 4.40 — separate envs.
+# UnifoLM-VLA-Base (Qwen2.5-VL + action head; config: transformers>=4.49). OpenVLA uses 4.40 — separate envs.
 UNIFOLM_MIN_TRANSFORMERS = (4, 49, 0)
 UNIFOLM_MIN_JINJA2 = (3, 1, 0)
 
@@ -230,7 +232,7 @@ def _unifolm_model_loader_classes() -> List[Any]:
 
 def _normalize_unifolm_config(config: Any) -> Any:
     """
-    UnifoLM-VLM-Base may ship nested configs as raw dicts.
+    UnifoLM-VLA-Base may ship nested configs as raw dicts.
 
     transformers 4.49 expects PretrainedConfig objects when building
     GenerationConfig, which otherwise raises:
@@ -245,14 +247,80 @@ def _normalize_unifolm_config(config: Any) -> Any:
     return config
 
 
-# ── UnifoLM wrapper (V100 FP16 + compile + async streams) ────────────────────
+def _ensure_unifolm_vla_on_path() -> Optional[Path]:
+    """
+    Make cloned ``unifolm-vla/src`` importable without ``pip install -e .``.
+
+    Looks for a sibling checkout at ``research_summer_2026/unifolm-vla``.
+    """
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[2] / "unifolm-vla" / "src",
+        here.parents[1] / "unifolm-vla" / "src",
+        Path.cwd() / "unifolm-vla" / "src",
+        Path.cwd().parent / "unifolm-vla" / "src",
+    ]
+    for src in candidates:
+        if (src / "unifolm_vla").is_dir():
+            src_str = str(src)
+            if src_str not in sys.path:
+                sys.path.insert(0, src_str)
+            return src
+    return None
+
+
+def _is_unifolm_vla_hub(model_id: str) -> bool:
+    """True for Unitree VLA checkpoints (``UnifoLM-VLA-*``), not VLM-only backbones."""
+    return "UnifoLM-VLA" in model_id or "Unifolm-VLA" in model_id
+
+
+def _bounds_normalize(values: np.ndarray, norm_stats: Dict[str, Any]) -> np.ndarray:
+    mask = norm_stats.get("mask", np.ones_like(norm_stats["min"], dtype=bool))
+    high = np.array(norm_stats["max"], dtype=np.float32)
+    low = np.array(norm_stats["min"], dtype=np.float32)
+    return np.clip(
+        np.where(mask, 2 * (values - low) / (high - low + 1e-8) - 1, values),
+        a_min=-1.0,
+        a_max=1.0,
+    )
+
+
+def _bounds_unnormalize(values: np.ndarray, norm_stats: Dict[str, Any]) -> np.ndarray:
+    mask = norm_stats.get("mask", np.ones_like(norm_stats["min"], dtype=bool))
+    high = np.array(norm_stats["max"], dtype=np.float32)
+    low = np.array(norm_stats["min"], dtype=np.float32)
+    return np.where(
+        mask,
+        0.5 * (values + 1) * (high - low + 1e-8) + low,
+        values,
+    ).astype(np.float32)
+
+
+def _download_unifolm_vla_snapshot(model_id: str) -> Path:
+    """Download VLA checkpoint + config.yaml + dataset_statistics.json from the Hub."""
+    from huggingface_hub import snapshot_download
+
+    local_dir = snapshot_download(
+        repo_id=model_id,
+        allow_patterns=["config.yaml", "dataset_statistics.json", "checkpoints/*"],
+    )
+    ckpt_path = Path(local_dir) / "checkpoints" / "pytorch_model.pt"
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(
+            f"Expected VLA checkpoint at {ckpt_path}. "
+            f"Repo {model_id} must contain checkpoints/pytorch_model.pt."
+        )
+    return ckpt_path
+
+
+# ── UnifoLM wrapper (V100 FP16 + CUDA Graphs + async streams) ────────────────
 class UnifoLMVLAWrapper:
     """
-    Wrapper for unitreerobotics/UnifoLM-VLM-Base.
+    Wrapper for unitreerobotics/UnifoLM-VLA-Base.
 
     V100 optimizations (Volta SM 7.0):
       - Native ``torch.float16`` weights + ``autocast(fp16)`` for Tensor Cores
-      - ``torch.compile(..., mode="reduce-overhead")`` to fuse fragmented kernels
+      - ``torch.cuda.CUDAGraph`` replay to eliminate per-kernel CPU dispatch
       - Pinned host memory + ``non_blocking`` H2D copies (PCIe Gen 3)
       - GPU-resident ``infer_gpu`` hot path (no ``.item()`` / ``.cpu()`` in loop)
       - Optional :class:`AsyncVLARuntime` for 100 Hz ESN register sampling
@@ -262,27 +330,38 @@ class UnifoLMVLAWrapper:
 
     def __init__(
         self,
-        model_id: str = "unitreerobotics/UnifoLM-VLM-Base",
+        model_id: str = "unitreerobotics/UnifoLM-VLA-Base",
         use_int4: bool = False,
         action_dim: int = G1_DOF,
         allow_mock_fallback: bool = True,
         use_fp16: bool = True,
-        use_compile: bool = True,
-        compile_mode: str = "reduce-overhead",
-        n_warmup: int = 2,
+        use_cuda_graph: bool = True,
+        max_new_tokens: int = 64,
+        cuda_graph_warmup: int = 2,
+        cuda_graph_min_free_mib: float = 512.0,
+        vlm_backbone_id: str = "unitreerobotics/UnifoLM-VLM-Base",
+        unnorm_key: str = "g1_clean_table",
     ):
         self.model_id = model_id
+        self.vlm_backbone_id = vlm_backbone_id
+        self.unnorm_key = unnorm_key
         self.use_int4 = use_int4
         self.action_dim = action_dim
         self.allow_mock_fallback = allow_mock_fallback
         self.use_fp16 = use_fp16 and torch.cuda.is_available()
-        self.use_compile = use_compile and torch.cuda.is_available()
-        self.compile_mode = compile_mode
-        self.n_warmup = n_warmup
+        self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
+        self.max_new_tokens = max_new_tokens
+        self.cuda_graph_warmup = max(cuda_graph_warmup, 1)
+        self.cuda_graph_min_free_mib = cuda_graph_min_free_mib
 
         self.model: Optional[Any] = None
         self.processor: Optional[Any] = None
-        self._compiled = False
+        self._uses_unifolm_vla_framework: bool = False
+        self._norm_stats_action: Optional[Dict[str, Any]] = None
+        self._norm_stats_proprio: Optional[Dict[str, Any]] = None
+        self._cuda_graph_engine: Optional[VLACUDAGraphEngine] = None
+        self._graph_instruction: Optional[str] = None
+        self._cuda_graph_capture_attempted: bool = False
 
         cuda_ok = torch.cuda.is_available()
         self.device = torch.device("cuda:0" if cuda_ok else "cpu")
@@ -294,74 +373,36 @@ class UnifoLMVLAWrapper:
         self.async_runtime: Optional[AsyncVLARuntime] = None
 
         self._load_model()
-        if self.model is not None:
-            self._warmup_compiled_graph()
+
+    def _reset_vlm_generation_state(self) -> None:
+        """
+        Clear mRoPE / KV side-effects left by manual CUDA Graph warmup forwards.
+
+        Without this, a failed graph capture can leave ``rope_deltas`` set and
+        ``generate()`` emits token soup instead of action text.
+        """
+        if self.model is None:
+            return
+        if hasattr(self.model, "rope_deltas"):
+            self.model.rope_deltas = None
+        inner = getattr(self.model, "model", None)
+        if inner is not None and hasattr(inner, "rope_deltas"):
+            inner.rope_deltas = None
+        if torch.cuda.is_available():
+            if self.vla_stream is not None:
+                self.vla_stream.synchronize()
+            torch.cuda.current_stream().synchronize()
 
     def _load_model(self) -> None:
         logger.info(
             f"Loading model: {self.model_id} | INT4={self.use_int4} | "
-            f"FP16={self.use_fp16} | compile={self.use_compile}"
+            f"FP16={self.use_fp16} | cuda_graph={self.use_cuda_graph}"
         )
         try:
-            from transformers import AutoConfig, AutoProcessor
-
-            # V100: bfloat16 has no Tensor Core path — use native FP16.
-            load_kwargs: Dict[str, Any] = {
-                "trust_remote_code": True,
-                "low_cpu_mem_usage": True,
-                "torch_dtype": self.inference_dtype if torch.cuda.is_available() else torch.float32,
-            }
-            if self.use_int4:
-                from transformers import BitsAndBytesConfig
-
-                load_kwargs["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=self.inference_dtype,
-                )
-
-            self.processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
-            config = _normalize_unifolm_config(
-                AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
-            )
-
-            model = None
-            load_errors: List[str] = []
-            for model_cls in _unifolm_model_loader_classes():
-                try:
-                    model = model_cls.from_pretrained(self.model_id, config=config, **load_kwargs)
-                    if model_cls.__name__ != "Qwen2_5_VLForConditionalGeneration" and load_errors:
-                        logger.warning(
-                            f"Loaded with {model_cls.__name__} (preferred: Qwen2_5_VLForConditionalGeneration). "
-                            f"Earlier: {'; '.join(load_errors)}"
-                        )
-                    else:
-                        logger.info(f"Loaded with {model_cls.__name__}")
-                    break
-                except Exception as exc:
-                    load_errors.append(f"{model_cls.__name__}: {exc}")
-                    continue
-
-            if model is None:
-                detail = "; ".join(load_errors) if load_errors else "no loader attempted"
-                raise RuntimeError(
-                    f"Unable to load model with supported transformers classes ({detail})."
-                )
-
-            if torch.cuda.is_available():
-                model = model.to(self.device)
-            model = model.eval()
-
-            if self.use_compile:
-                try:
-                    model = torch.compile(model, mode=self.compile_mode)
-                    self._compiled = True
-                    logger.info(f"torch.compile enabled (mode={self.compile_mode})")
-                except Exception as exc:
-                    logger.warning(f"torch.compile unavailable, running eager: {exc}")
-
-            self.model = model
-            logger.info("Model loaded successfully from HuggingFace.")
-
+            if _is_unifolm_vla_hub(self.model_id):
+                self._load_unifolm_vla_framework()
+            else:
+                self._load_unifolm_vlm_transformers()
         except Exception as e:
             if not self.allow_mock_fallback:
                 raise RuntimeError(
@@ -372,16 +413,219 @@ class UnifoLMVLAWrapper:
             self.model = None
             self.processor = None
 
-    def _warmup_compiled_graph(self) -> None:
-        """Compile/warm persistent CUDA graphs outside the real-time control loop."""
-        if self.n_warmup <= 0:
-            return
-        dummy = np.zeros((224, 224, 3), dtype=np.uint8)
-        for _ in range(self.n_warmup):
-            self.infer_gpu(dummy, "warmup")
+    def _load_unifolm_vla_framework(self) -> None:
+        """
+        Load ``UnifoLM-VLA-*`` via the official ``unifolm-vla`` package.
+
+        Hub layout: ``checkpoints/pytorch_model.pt``, ``config.yaml``,
+        ``dataset_statistics.json`` (not a plain transformers repo).
+        """
+        try:
+            vla_src = _ensure_unifolm_vla_on_path()
+            if vla_src is None:
+                raise ImportError(
+                    "Could not find unifolm-vla checkout. Clone next to this repo:\n"
+                    "  git clone https://github.com/unitreerobotics/unifolm-vla.git "
+                    "../unifolm-vla\n"
+                    "Then: pip install omegaconf qwen-vl-utils"
+                )
+            from unifolm_vla.model.framework.base_framework import baseframework
+        except ImportError as exc:
+            raise ImportError(
+                "UnifoLM-VLA-Base needs the unifolm-vla source tree on PYTHONPATH.\n"
+                "  git clone https://github.com/unitreerobotics/unifolm-vla.git "
+                "(sibling of research/)\n"
+                "  pip install omegaconf qwen-vl-utils\n"
+                "Do NOT use pip install -e . — editable install fails on this repo."
+            ) from exc
+
+        ckpt_path = _download_unifolm_vla_snapshot(self.model_id)
+        logger.info(f"Loading VLA checkpoint: {ckpt_path}")
+        logger.info(f"VLM backbone: {self.vlm_backbone_id} | unnorm_key={self.unnorm_key}")
+
+        vla = baseframework.from_pretrained(str(ckpt_path), vlm_pretrained_path=self.vlm_backbone_id)
+        if self.unnorm_key not in vla.norm_stats:
+            available = ", ".join(sorted(vla.norm_stats.keys()))
+            raise KeyError(
+                f"unnorm_key={self.unnorm_key!r} not in VLA dataset statistics. "
+                f"Available: {available}"
+            )
+
+        if self.use_fp16 and torch.cuda.is_available():
+            vla = vla.to(torch.float16)
+        elif torch.cuda.is_available():
+            vla = vla.to(torch.float32)
+
+        if torch.cuda.is_available():
+            vla = vla.to(self.device)
+        vla = vla.eval()
+
+        self.model = vla
+        self.processor = vla.qwen_vl_interface.processor
+        self._uses_unifolm_vla_framework = True
+        self._norm_stats_action = vla.norm_stats[self.unnorm_key]["action"]
+        self._norm_stats_proprio = vla.norm_stats[self.unnorm_key]["proprio"]
+        self.use_cuda_graph = False
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        logger.info(f"Warmup complete ({self.n_warmup} passes).")
+            torch.cuda.empty_cache()
+            free_mib = cuda_free_mib(self.device)
+            logger.info(
+                f"UnifoLM-VLA loaded (predict_action path). "
+                f"Free VRAM={free_mib:.0f} MiB."
+            )
+        else:
+            logger.info("UnifoLM-VLA loaded (predict_action path).")
+
+    def _load_unifolm_vlm_transformers(self) -> None:
+        from transformers import AutoConfig, AutoProcessor
+
+        load_kwargs: Dict[str, Any] = {
+            "trust_remote_code": True,
+            "low_cpu_mem_usage": True,
+            "torch_dtype": self.inference_dtype if torch.cuda.is_available() else torch.float32,
+        }
+        if self.use_int4:
+            from transformers import BitsAndBytesConfig
+
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=self.inference_dtype,
+            )
+
+        self.processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
+        config = _normalize_unifolm_config(
+            AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
+        )
+
+        model = None
+        load_errors: List[str] = []
+        for model_cls in _unifolm_model_loader_classes():
+            try:
+                model = model_cls.from_pretrained(self.model_id, config=config, **load_kwargs)
+                if model_cls.__name__ != "Qwen2_5_VLForConditionalGeneration" and load_errors:
+                    logger.warning(
+                        f"Loaded with {model_cls.__name__} (preferred: Qwen2_5_VLForConditionalGeneration). "
+                        f"Earlier: {'; '.join(load_errors)}"
+                    )
+                else:
+                    logger.info(f"Loaded with {model_cls.__name__}")
+                break
+            except Exception as exc:
+                load_errors.append(f"{model_cls.__name__}: {exc}")
+                continue
+
+        if model is None:
+            detail = "; ".join(load_errors) if load_errors else "no loader attempted"
+            raise RuntimeError(
+                f"Unable to load model with supported transformers classes ({detail})."
+            )
+
+        if torch.cuda.is_available():
+            model = model.to(self.device)
+        model = model.eval()
+
+        self.model = model
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            free_mib = cuda_free_mib(self.device)
+            logger.info(
+                f"Model loaded successfully from HuggingFace. "
+                f"Free VRAM={free_mib:.0f} MiB (CUDA Graph needs >= {self.cuda_graph_min_free_mib:.0f} MiB)."
+            )
+        else:
+            logger.info("Model loaded successfully from HuggingFace.")
+
+    def _ensure_cuda_graph(self, instruction: str, template_inputs: Dict[str, Any]) -> None:
+        """
+        One-time CUDA Graph capture for a fixed instruction + input shape.
+
+        Performs ``cuda_graph_warmup`` eager passes, then records the graph on
+        ``vla_stream`` for replay with in-place ``copy_`` updates.
+        """
+        if not self.use_cuda_graph or self.model is None:
+            return
+        if self._cuda_graph_engine is not None and self._graph_instruction == instruction:
+            return
+        if self._cuda_graph_capture_attempted and self._cuda_graph_engine is None:
+            return
+        if hasattr(self.model, "predict_action"):
+            logger.info("predict_action path detected — CUDA Graph capture skipped.")
+            self._cuda_graph_capture_attempted = True
+            return
+
+        if self.vla_stream is None:
+            return
+
+        free_mib = cuda_free_mib(self.device)
+        logger.info(f"CUDA Graph capture attempt | free VRAM={free_mib:.0f} MiB")
+        if free_mib < self.cuda_graph_min_free_mib:
+            logger.warning(
+                f"Skipping CUDA Graph capture: {free_mib:.0f} MiB free < "
+                f"{self.cuda_graph_min_free_mib:.0f} MiB required on V100 32GB."
+            )
+            self._cuda_graph_capture_attempted = True
+            return
+
+        VLACUDAGraphEngine._release_memory_before_capture()
+        self._cuda_graph_capture_attempted = True
+        engine = VLACUDAGraphEngine(
+            self.model,
+            device=self.device,
+            stream=self.vla_stream,
+            max_new_tokens=self.max_new_tokens,
+            warmup_iters=self.cuda_graph_warmup,
+            use_fp16=self.use_fp16,
+            joint_state_dim=self.action_dim,
+            min_capture_headroom_mib=self.cuda_graph_min_free_mib,
+        )
+        try:
+            engine.capture_from_template(template_inputs)
+        except RuntimeError as exc:
+            logger.warning(
+                f"CUDA Graph capture failed — falling back to eager generate: {exc}"
+            )
+            self._cuda_graph_engine = None
+            self._graph_instruction = None
+            VLACUDAGraphEngine._cleanup_failed_capture()
+            self._reset_vlm_generation_state()
+            return
+
+        self._cuda_graph_engine = engine
+        self._graph_instruction = instruction
+        logger.info(f"CUDA Graph ready (mode={engine.capture_mode}).")
+
+    def warmup_cuda_graph(
+        self,
+        image: np.ndarray,
+        instruction: str,
+        joint_state: Optional[np.ndarray] = None,
+    ) -> bool:
+        """
+        Capture CUDA Graph **without** running a full eager generate (saves VRAM).
+
+        Returns True when a graph is captured and ready for replay.
+        """
+        if self.model is None or self.processor is None:
+            return False
+
+        from PIL import Image as PILImage
+
+        pil_img = PILImage.fromarray(image)
+        prompt = (
+            "You are a humanoid robot controller for Unitree G1. "
+            f"Task: {TASK_NAME}. "
+            f"Instruction: {instruction}. "
+            f"Return exactly {self.action_dim} joint velocity values as a Python list of floats."
+        )
+        inputs, _ = self._prepare_inputs(prompt=prompt, image=pil_img)
+
+        if self.use_cuda_graph and not hasattr(self.model, "predict_action"):
+            self._ensure_cuda_graph(instruction, inputs)
+
+        return self._cuda_graph_engine is not None and self._cuda_graph_engine.captured
 
     def create_async_runtime(
         self,
@@ -426,7 +670,12 @@ class UnifoLMVLAWrapper:
             action = action_gpu.detach().float().numpy()
         return action, input_tok, output_tok
 
-    def infer_gpu(self, image: np.ndarray, instruction: str) -> Tuple[torch.Tensor, int, int]:
+    def infer_gpu(
+        self,
+        image: np.ndarray,
+        instruction: str,
+        joint_state: Optional[np.ndarray] = None,
+    ) -> Tuple[torch.Tensor, int, int]:
         """
         Hot-path inference — action tensor stays on GPU; no sync primitives.
         """
@@ -436,6 +685,14 @@ class UnifoLMVLAWrapper:
         from PIL import Image as PILImage
 
         pil_img = PILImage.fromarray(image)
+
+        if self._uses_unifolm_vla_framework:
+            action_gpu, output_tok = self._infer_unifolm_vla_action_gpu(
+                pil_img, instruction, joint_state
+            )
+            action_gpu = self._reshape_action_gpu(action_gpu)
+            return action_gpu, 0, output_tok
+
         prompt = (
             "You are a humanoid robot controller for Unitree G1. "
             f"Task: {TASK_NAME}. "
@@ -444,7 +701,20 @@ class UnifoLMVLAWrapper:
         )
 
         inputs, input_len = self._prepare_inputs(prompt=prompt, image=pil_img)
-        action_gpu, output_tok = self._forward_and_parse_action_gpu(inputs=inputs)
+
+        joint_state_gpu: Optional[torch.Tensor] = None
+        if joint_state is not None and self._host_transfer is not None:
+            joint_state_gpu = self._host_transfer.numpy_to_device(
+                joint_state.astype(np.float32)
+            )
+
+        if self.use_cuda_graph and not hasattr(self.model, "predict_action"):
+            self._ensure_cuda_graph(instruction, inputs)
+
+        action_gpu, output_tok = self._forward_and_parse_action_gpu(
+            inputs=inputs,
+            joint_state_gpu=joint_state_gpu,
+        )
         action_gpu = self._reshape_action_gpu(action_gpu)
         return action_gpu, input_len, output_tok
 
@@ -478,37 +748,152 @@ class UnifoLMVLAWrapper:
 
         return inputs, input_len
 
-    def _forward_and_parse_action_gpu(self, inputs: Dict[str, Any]) -> Tuple[torch.Tensor, int]:
+    def _infer_unifolm_vla_action_gpu(
+        self,
+        pil_img: Any,
+        instruction: str,
+        joint_state: Optional[np.ndarray] = None,
+    ) -> Tuple[torch.Tensor, int]:
+        """Official UnifoLM-VLA ``predict_action`` path (action head, not text generation)."""
+        assert self.model is not None and self.processor is not None
+        assert self._norm_stats_action is not None and self._norm_stats_proprio is not None
+
+        lang = instruction.lower().strip()
+        if not lang.startswith("the task is"):
+            lang = f'The task is "{lang}".'
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": pil_img},
+                    {"type": "text", "text": lang},
+                ],
+            }
+        ]
+
+        try:
+            from qwen_vl_utils import process_vision_info
+
+            text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            image_inputs, video_inputs = process_vision_info(messages)
+            batch_input = self.processor(
+                text=text,
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt",
+            )
+        except ImportError:
+            text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            batch_input = self.processor(
+                text=text,
+                images=[pil_img],
+                return_tensors="pt",
+            )
+
+        proprio_dim = len(self._norm_stats_proprio["min"])
+        if joint_state is None:
+            proprio = np.zeros(proprio_dim, dtype=np.float32)
+        else:
+            proprio = np.asarray(joint_state, dtype=np.float32).flatten()
+            if proprio.size < proprio_dim:
+                proprio = np.pad(proprio, (0, proprio_dim - proprio.size))
+            proprio = proprio[:proprio_dim]
+
+        proprio_norm = _bounds_normalize(proprio, self._norm_stats_proprio)
+        batch_input["state"] = (
+            torch.from_numpy(proprio_norm.astype(np.float32))
+            .unsqueeze(0)
+            .to(self.device)
+        )
+
         stream_ctx = torch.cuda.stream(self.vla_stream) if self.vla_stream is not None else nullcontext()
         autocast_ctx = (
-            torch.cuda.amp.autocast(dtype=torch.float16)
+            torch.cuda.amp.autocast(dtype=torch.float16, cache_enabled=False)
             if self.use_fp16 and torch.cuda.is_available()
             else nullcontext()
         )
 
         with torch.no_grad(), stream_ctx, autocast_ctx:
-            if hasattr(self.model, "predict_action"):
+            for key, value in batch_input.items():
+                if isinstance(value, torch.Tensor):
+                    batch_input[key] = value.to(self.device, non_blocking=True)
+            action_out = self.model.predict_action(qwen_inputs=batch_input)
+
+        if self.vla_stream is not None:
+            self.vla_stream.synchronize()
+
+        normalized = action_out["normalized_actions"][0]
+        if isinstance(normalized, torch.Tensor):
+            normalized = normalized.detach().float().cpu().numpy()
+        action_cpu = _bounds_unnormalize(np.asarray(normalized, dtype=np.float32), self._norm_stats_action)
+        action_gpu = torch.from_numpy(action_cpu).to(
+            device=self.device, dtype=torch.float32, non_blocking=True
+        )
+        output_tok = int(action_cpu.size)
+        return action_gpu, output_tok
+
+    def _forward_and_parse_action_gpu(
+        self,
+        inputs: Dict[str, Any],
+        joint_state_gpu: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, int]:
+        if hasattr(self.model, "predict_action"):
+            stream_ctx = torch.cuda.stream(self.vla_stream) if self.vla_stream is not None else nullcontext()
+            autocast_ctx = (
+                torch.cuda.amp.autocast(dtype=torch.float16, cache_enabled=False)
+                if self.use_fp16 and torch.cuda.is_available()
+                else nullcontext()
+            )
+            with torch.no_grad(), stream_ctx, autocast_ctx:
                 action = self.model.predict_action(**inputs, do_sample=False)
                 action_t = action if isinstance(action, torch.Tensor) else torch.as_tensor(action)
                 action_t = action_t.to(device=self.device, dtype=torch.float32)
                 output_tok = int(action_t.numel())
                 return action_t, output_tok
 
-            generated = self.model.generate(**inputs, max_new_tokens=96, do_sample=False)
+        # CUDA Graph replay path — single GPU-side replay, no per-kernel CPU dispatch.
+        if self._cuda_graph_engine is not None and self._cuda_graph_engine.captured:
+            generated = self._cuda_graph_engine.replay(inputs, joint_state=joint_state_gpu)
+            output_tok = self.max_new_tokens
+        else:
+            self._reset_vlm_generation_state()
+            stream_ctx = torch.cuda.stream(self.vla_stream) if self.vla_stream is not None else nullcontext()
+            autocast_ctx = (
+                torch.cuda.amp.autocast(dtype=torch.float16, cache_enabled=False)
+                if self.use_fp16 and torch.cuda.is_available()
+                else nullcontext()
+            )
+            with torch.no_grad(), stream_ctx, autocast_ctx:
+                generated = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    temperature=None,
+                    top_p=None,
+                )
+            input_ids = inputs.get("input_ids")
+            output_tok = (
+                int(generated.shape[-1] - input_ids.shape[-1])
+                if input_ids is not None
+                else int(generated.shape[-1])
+            )
 
-        input_ids = inputs.get("input_ids")
-        output_tok = (
-            int(generated.shape[-1] - input_ids.shape[-1])
-            if input_ids is not None
-            else int(generated.shape[-1])
-        )
-
-        # Text decode is CPU-bound; defer to after GPU generation completes.
-        # Only sync point for autoregressive models — isolated from matmul hot path.
+        # Text decode is CPU-bound; runs after graph replay completes on vla_stream.
         if self.vla_stream is not None:
             self.vla_stream.synchronize()
 
-        decoded = self.processor.batch_decode(generated, skip_special_tokens=True)[0]
+        input_ids = inputs.get("input_ids")
+        if input_ids is not None and generated.shape[-1] > input_ids.shape[-1]:
+            new_tokens = generated[:, input_ids.shape[-1] :]
+            decoded = self.processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
+        else:
+            decoded = self.processor.batch_decode(generated, skip_special_tokens=True)[0]
         action_cpu = self._parse_action_text(decoded)
         action_gpu = torch.from_numpy(action_cpu).to(
             device=self.device, dtype=torch.float32, non_blocking=True
@@ -516,13 +901,22 @@ class UnifoLMVLAWrapper:
         return action_gpu, output_tok
 
     def _parse_action_text(self, text: str) -> np.ndarray:
-        bracket_match = re.search(r"\[([^\]]+)\]", text, flags=re.DOTALL)
-        if bracket_match:
-            text = bracket_match.group(1)
+        """Parse model-generated text into a float action vector."""
+        bracket_groups = re.findall(r"\[([^\]]+)\]", text, flags=re.DOTALL)
+        best_numbers: List[str] = []
+        for group in bracket_groups:
+            nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", group)
+            if len(nums) > len(best_numbers):
+                best_numbers = nums
 
-        numbers = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
+        numbers = best_numbers if best_numbers else re.findall(
+            r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text
+        )
         if not numbers:
-            raise ValueError("Model output did not contain numeric action values.")
+            preview = text[:200].replace("\n", " ")
+            raise ValueError(
+                f"Model output did not contain numeric action values. Preview: {preview!r}"
+            )
         return np.array([float(x) for x in numbers], dtype=np.float32)
 
     def _reshape_action_gpu(self, action: torch.Tensor) -> torch.Tensor:
@@ -545,6 +939,31 @@ class UnifoLMVLAWrapper:
         n_input_tok = 280 + len(instruction.split())
         n_output_tok = self.action_dim
         return action_gpu, n_input_tok, n_output_tok
+
+
+def summarize_action_failures(records: List[InferenceRecord]) -> Dict[str, Any]:
+    """Classify failed trials for debugging parse vs numeric issues."""
+    failed = [r for r in records if r.failed]
+    ok = [r for r in records if not r.failed]
+    summary: Dict[str, Any] = {
+        "n_failed": len(failed),
+        "n_ok": len(ok),
+        "failure_modes": {},
+    }
+    if not ok:
+        for r in failed:
+            summary["failure_modes"][r.failure_reason] = summary["failure_modes"].get(r.failure_reason, 0) + 1
+        return summary
+
+    ok_actions = np.array([r.action for r in ok], dtype=np.float32)
+    summary["ok_action_std_mean"] = float(ok_actions.std(axis=0).mean())
+    summary["ok_action_nan_rate"] = float(np.isnan(ok_actions).mean())
+    summary["ok_unique_actions"] = int(len({tuple(np.round(a, 4)) for a in ok_actions}))
+
+    for r in failed:
+        summary["failure_modes"][r.failure_reason] = summary["failure_modes"].get(r.failure_reason, 0) + 1
+
+    return summary
 
 
 # ── Core profiling routine ───────────────────────────────────
@@ -662,6 +1081,12 @@ def profile_unifolm_vla0(
         generated_at=generated_at,
         run_tag=run_tag,
     )
+    fail_diag = summarize_action_failures(records)
+    logger.info(f"Failure diagnostics: {fail_diag}")
+    if model._cuda_graph_engine is not None and model._cuda_graph_engine.captured:
+        logger.info(f"CUDA Graph active: mode={model._cuda_graph_engine.capture_mode}")
+    else:
+        logger.info("CUDA Graph inactive — eager generate path used for all trials")
     return report, records
 
 
@@ -675,12 +1100,15 @@ def run_vla_torch_profiler(
     profiler_source: str = "pytorch_profiler",
     run_tag: Optional[str] = None,
     results_dir: Optional[Path] = None,
+    export_chrome_trace: bool = False,
 ) -> Dict[str, Any]:
     """
     Trace VLA action generation with torch.profiler.
 
     Warms up outside the profiler, then records ``n_profile_steps`` inference
     calls inside a profiler context with CPU and (when available) CUDA activity.
+
+    Set ``export_chrome_trace=True`` to write the ~2 GB Chrome trace (default off).
     """
     activities = [torch.profiler.ProfilerActivity.CPU]
     gpu_available = torch.cuda.is_available()
@@ -697,104 +1125,127 @@ def run_vla_torch_profiler(
         f"torch.profiler warmup | n_warmup={n_warmup} | n_profile_steps={n_profile_steps} | GPU={gpu_available}"
     )
 
-    for _ in range(n_warmup):
-        if use_nvtx:
-            torch.cuda.nvtx.range_push("vla_action_generation")
-        action, _, _ = model.infer(obs, instruction)
-        if use_nvtx:
-            torch.cuda.nvtx.range_pop()
-        if gpu_available:
-            torch.cuda.synchronize()
-        obs, _, done, _ = env.step(action)
-        if done:
-            obs = env.reset()
+    # torch.profiler traces eager kernels; disable CUDA Graph capture for this run.
+    saved_use_cuda_graph = model.use_cuda_graph
+    model.use_cuda_graph = False
+    fallback_action = np.zeros(G1_DOF, dtype=np.float32)
 
-    trace_path = results_dir / "vla_action_chrome_trace.json"
-    ops_txt_path = results_dir / "vla_action_profiler_ops.txt"
-    ops_json_path = results_dir / "vla_action_profiler_ops.json"
-    sort_key = "cuda_time_total" if gpu_available else "cpu_time_total"
-
-    with torch.profiler.profile(
-        activities=activities,
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=True,
-    ) as prof:
-        for _ in range(n_profile_steps):
+    def _profiler_step(obs_in: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        try:
             if use_nvtx:
                 torch.cuda.nvtx.range_push("vla_action_generation")
-            action, _, _ = model.infer(obs, instruction)
+            action, _, _ = model.infer(obs_in, instruction)
+            return action, obs_in
+        except Exception as exc:
+            logger.warning(f"Profiler inference failed: {exc}")
+            return fallback_action, obs_in
+        finally:
             if use_nvtx:
                 torch.cuda.nvtx.range_pop()
+
+    try:
+        for _ in range(n_warmup):
+            action, _ = _profiler_step(obs)
             if gpu_available:
                 torch.cuda.synchronize()
-            prof.step()
             obs, _, done, _ = env.step(action)
             if done:
                 obs = env.reset()
 
-    table = prof.key_averages().table(sort_by=sort_key, row_limit=30)
-    stack_table = prof.key_averages(group_by_stack_n=5).table(sort_by=sort_key, row_limit=30)
-    prof.export_chrome_trace(str(trace_path))
+        trace_path = results_dir / "vla_action_chrome_trace.json"
+        ops_txt_path = results_dir / "vla_action_profiler_ops.txt"
+        ops_json_path = results_dir / "vla_action_profiler_ops.json"
+        sort_key = "cuda_time_total" if gpu_available else "cpu_time_total"
 
-    with open(ops_txt_path, "w", encoding="utf-8") as f:
-        f.write("VLA action generation — torch.profiler key averages\n")
-        f.write(f"profiler_source={profiler_source}\n")
-        f.write(f"generated_at={generated_at}\n")
-        f.write(f"run_tag={run_tag}\n")
-        f.write(f"sort_by={sort_key} | n_profile_steps={n_profile_steps}\n")
-        f.write("=" * 72 + "\n\n")
-        f.write(table)
-        f.write("\n\n--- grouped by stack ---\n\n")
-        f.write(stack_table)
+        with torch.profiler.profile(
+            activities=activities,
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        ) as prof:
+            for _ in range(n_profile_steps):
+                action, _ = _profiler_step(obs)
+                if gpu_available:
+                    torch.cuda.synchronize()
+                prof.step()
+                obs, _, done, _ = env.step(action)
+                if done:
+                    obs = env.reset()
 
-    op_records = []
-    for event in prof.key_averages():
-        op_records.append(
-            {
-                "name": event.key,
-                "count": event.count,
-                "cpu_time_us": event.cpu_time,
-                "cuda_time_us": getattr(event, "device_time", getattr(event, "cuda_time", 0.0)),
-                "cpu_memory_bytes": getattr(event, "cpu_memory_usage", 0),
-                "cuda_memory_bytes": getattr(
-                    event, "device_memory_usage", getattr(event, "cuda_memory_usage", 0)
-                ),
-            }
+        table = prof.key_averages().table(sort_by=sort_key, row_limit=30)
+        stack_table = prof.key_averages(group_by_stack_n=5).table(sort_by=sort_key, row_limit=30)
+        if export_chrome_trace:
+            prof.export_chrome_trace(str(trace_path))
+            logger.info(f"torch.profiler trace saved: {trace_path}")
+        else:
+            logger.info("Chrome trace export skipped (export_chrome_trace=False)")
+
+        with open(ops_txt_path, "w", encoding="utf-8") as f:
+            f.write("VLA action generation — torch.profiler key averages\n")
+            f.write(f"profiler_source={profiler_source}\n")
+            f.write(f"generated_at={generated_at}\n")
+            f.write(f"run_tag={run_tag}\n")
+            f.write(f"sort_by={sort_key} | n_profile_steps={n_profile_steps}\n")
+            f.write("=" * 72 + "\n\n")
+            f.write(table)
+            f.write("\n\n--- grouped by stack ---\n\n")
+            f.write(stack_table)
+
+        op_records = []
+        for event in prof.key_averages():
+            op_records.append(
+                {
+                    "name": event.key,
+                    "count": event.count,
+                    "cpu_time_us": event.cpu_time,
+                    "cuda_time_us": getattr(event, "device_time", getattr(event, "cuda_time", 0.0)),
+                    "cpu_memory_bytes": getattr(event, "cpu_memory_usage", 0),
+                    "cuda_memory_bytes": getattr(
+                        event, "device_memory_usage", getattr(event, "cuda_memory_usage", 0)
+                    ),
+                }
+            )
+        op_records.sort(
+            key=lambda row: row["cuda_time_us"] if gpu_available else row["cpu_time_us"],
+            reverse=True,
         )
-    op_records.sort(key=lambda row: row["cuda_time_us"] if gpu_available else row["cpu_time_us"], reverse=True)
 
-    profiler_report = {
-        "model_id": model.model_id,
-        "task": TASK_NAME,
-        "instruction": instruction,
-        "n_warmup": n_warmup,
-        "n_profile_steps": n_profile_steps,
-        "gpu_available": gpu_available,
-        "profiler_source": profiler_source,
-        "generated_at": generated_at,
-        "run_tag": run_tag,
-        "results_dir": str(results_dir),
-        "sort_key": sort_key,
-        "chrome_trace": str(trace_path),
-        "operations": op_records,
-    }
-    with open(ops_json_path, "w", encoding="utf-8") as f:
-        json.dump(profiler_report, f, indent=2)
+        profiler_report = {
+            "model_id": model.model_id,
+            "task": TASK_NAME,
+            "instruction": instruction,
+            "n_warmup": n_warmup,
+            "n_profile_steps": n_profile_steps,
+            "gpu_available": gpu_available,
+            "profiler_source": profiler_source,
+            "generated_at": generated_at,
+            "run_tag": run_tag,
+            "results_dir": str(results_dir),
+            "sort_key": sort_key,
+            "chrome_trace": str(trace_path) if export_chrome_trace else None,
+            "export_chrome_trace": export_chrome_trace,
+            "cuda_graph_captured": bool(
+                model._cuda_graph_engine is not None and model._cuda_graph_engine.captured
+            ),
+            "operations": op_records,
+        }
+        with open(ops_json_path, "w", encoding="utf-8") as f:
+            json.dump(profiler_report, f, indent=2)
 
-    logger.info(f"torch.profiler trace saved: {trace_path}")
-    logger.info(f"torch.profiler ops saved: {ops_txt_path}, {ops_json_path}")
+        logger.info(f"torch.profiler ops saved: {ops_txt_path}, {ops_json_path}")
 
-    return {
-        "profiler": prof,
-        "table": table,
-        "stack_table": stack_table,
-        "trace_path": trace_path,
-        "ops_txt_path": ops_txt_path,
-        "ops_json_path": ops_json_path,
-        "results_dir": results_dir,
-        "report": profiler_report,
-    }
+        return {
+            "profiler": prof,
+            "table": table,
+            "stack_table": stack_table,
+            "trace_path": trace_path,
+            "ops_txt_path": ops_txt_path,
+            "ops_json_path": ops_json_path,
+            "results_dir": results_dir,
+            "report": profiler_report,
+        }
+    finally:
+        model.use_cuda_graph = saved_use_cuda_graph
 
 
 # ── Plotting ─────────────────────────────────────────────────
@@ -947,7 +1398,19 @@ def save_logs(
 # ── Main ─────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="Profile UnifoLM-VLA-0 inference on G1_Clean_Table sim")
-    parser.add_argument("--model", type=str, default="unitreerobotics/UnifoLM-VLM-Base")
+    parser.add_argument("--model", type=str, default="unitreerobotics/UnifoLM-VLA-Base")
+    parser.add_argument(
+        "--vlm-backbone",
+        type=str,
+        default="unitreerobotics/UnifoLM-VLM-Base",
+        help="VLM backbone for UnifoLM-VLA-* checkpoints",
+    )
+    parser.add_argument(
+        "--unnorm-key",
+        type=str,
+        default="g1_clean_table",
+        help="Dataset key in VLA dataset_statistics.json for action denormalization",
+    )
     parser.add_argument("--n_trials", type=int, default=100)
     parser.add_argument("--use_int4", action="store_true", help="Use INT4 quantisation (requires bitsandbytes)")
     parser.add_argument(
@@ -967,9 +1430,15 @@ def main():
         help="Disable V100 FP16 Tensor Core path (not recommended on Volta)",
     )
     parser.add_argument(
-        "--no-compile",
+        "--no-cuda-graph",
         action="store_true",
-        help="Disable torch.compile kernel fusion",
+        help="Disable CUDA Graph capture/replay (eager generate fallback)",
+    )
+    parser.add_argument(
+        "--cuda-graph-warmup",
+        type=int,
+        default=3,
+        help="Warmup forward passes before CUDA Graph capture (minimum 3)",
     )
     args = parser.parse_args()
 
@@ -980,11 +1449,14 @@ def main():
     env = MockG1CleanTableEnv(image_size=(224, 224))
     model = UnifoLMVLAWrapper(
         model_id=args.model if not args.mock else "__mock__",
+        vlm_backbone_id=args.vlm_backbone,
+        unnorm_key=args.unnorm_key,
         use_int4=args.use_int4,
         action_dim=G1_DOF,
         allow_mock_fallback=not args.no_mock_fallback,
         use_fp16=not args.no_fp16,
-        use_compile=not args.no_compile,
+        use_cuda_graph=not args.no_cuda_graph,
+        cuda_graph_warmup=max(args.cuda_graph_warmup, 3),
     )
 
     profiler_source = "pytorch_profiler"
