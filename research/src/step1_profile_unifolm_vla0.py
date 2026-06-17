@@ -139,6 +139,87 @@ class MockG1CleanTableEnv:
         return img
 
 
+# UnifoLM-VLM-Base is Qwen2.5-VL (config: transformers>=4.49). OpenVLA uses 4.40 — separate envs.
+UNIFOLM_MIN_TRANSFORMERS = (4, 49, 0)
+UNIFOLM_MIN_JINJA2 = (3, 1, 0)
+
+
+def _parse_version_tuple(version: str) -> Tuple[int, ...]:
+    parts: List[int] = []
+    for piece in version.split(".")[:3]:
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def _parse_transformers_version(version: str) -> Tuple[int, ...]:
+    return _parse_version_tuple(version)
+
+
+def _unifolm_transformers_ok() -> bool:
+    import transformers
+
+    return _parse_version_tuple(transformers.__version__) >= UNIFOLM_MIN_TRANSFORMERS
+
+
+def _unifolm_jinja2_ok() -> bool:
+    try:
+        import jinja2
+    except ImportError:
+        return False
+    return _parse_version_tuple(jinja2.__version__) >= UNIFOLM_MIN_JINJA2
+
+
+def _unifolm_model_loader_classes() -> List[Any]:
+    """Return AutoModel classes to try, newest API first; skip symbols missing in this transformers build."""
+    import importlib
+
+    import transformers
+
+    if not _unifolm_transformers_ok():
+        raise ImportError(
+            f"transformers {transformers.__version__} is too old for UnifoLM (Qwen2.5-VL). "
+            f"Need >= {'.'.join(map(str, UNIFOLM_MIN_TRANSFORMERS))}. "
+            "Use a separate venv: pip install -r requirements-unifolm-gpu.txt"
+        )
+
+    candidates = (
+        "transformers.Qwen2_5_VLForConditionalGeneration",
+        "transformers.AutoModelForImageTextToText",
+        "transformers.AutoModelForVision2Seq",
+    )
+    loader_classes: List[Any] = []
+    for qualname in candidates:
+        module_path, _, attr = qualname.rpartition(".")
+        try:
+            module = importlib.import_module(module_path)
+            loader_classes.append(getattr(module, attr))
+        except (ImportError, AttributeError):
+            continue
+    if not loader_classes:
+        raise ImportError("No compatible HuggingFace model loader found in transformers.")
+    return loader_classes
+
+
+def _normalize_unifolm_config(config: Any) -> Any:
+    """
+    UnifoLM-VLM-Base may ship nested configs as raw dicts.
+
+    transformers 4.49 expects PretrainedConfig objects when building
+    GenerationConfig, which otherwise raises:
+    AttributeError: 'dict' object has no attribute 'to_dict'
+    """
+    from transformers import PretrainedConfig
+
+    if isinstance(getattr(config, "text_config", None), dict):
+        config.text_config = PretrainedConfig.from_dict(config.text_config)
+    if isinstance(getattr(config, "vision_config", None), dict):
+        config.vision_config = PretrainedConfig.from_dict(config.vision_config)
+    return config
+
+
 # ── UnifoLM wrapper ──────────────────────────────────────────
 class UnifoLMVLAWrapper:
     """
@@ -165,7 +246,7 @@ class UnifoLMVLAWrapper:
     def _load_model(self):
         logger.info(f"Loading model: {self.model_id} | INT4={self.use_int4}")
         try:
-            from transformers import AutoProcessor
+            from transformers import AutoConfig, AutoProcessor
 
             load_kwargs: Dict[str, Any] = {
                 "trust_remote_code": True,
@@ -181,20 +262,32 @@ class UnifoLMVLAWrapper:
                 )
 
             self.processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
+            config = _normalize_unifolm_config(
+                AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
+            )
 
             model = None
-            from transformers import AutoModelForImageTextToText, AutoModelForVision2Seq
-
-            for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            load_errors: List[str] = []
+            for model_cls in _unifolm_model_loader_classes():
                 try:
-                    model = model_cls.from_pretrained(self.model_id, **load_kwargs)
-                    logger.info(f"Loaded with {model_cls.__name__}")
+                    model = model_cls.from_pretrained(self.model_id, config=config, **load_kwargs)
+                    if model_cls.__name__ != "Qwen2_5_VLForConditionalGeneration" and load_errors:
+                        logger.warning(
+                            f"Loaded with {model_cls.__name__} (preferred: Qwen2_5_VLForConditionalGeneration). "
+                            f"Earlier: {'; '.join(load_errors)}"
+                        )
+                    else:
+                        logger.info(f"Loaded with {model_cls.__name__}")
                     break
-                except Exception:
+                except Exception as exc:
+                    load_errors.append(f"{model_cls.__name__}: {exc}")
                     continue
 
             if model is None:
-                raise RuntimeError("Unable to load model with supported transformers classes.")
+                detail = "; ".join(load_errors) if load_errors else "no loader attempted"
+                raise RuntimeError(
+                    f"Unable to load model with supported transformers classes ({detail})."
+                )
 
             if torch.cuda.is_available():
                 model = model.to(self.device)
@@ -231,7 +324,8 @@ class UnifoLMVLAWrapper:
         return action, input_len, output_tok
 
     def _prepare_inputs(self, prompt: str, image: Any) -> Tuple[Dict[str, Any], int]:
-        if hasattr(self.processor, "apply_chat_template"):
+        use_chat_template = hasattr(self.processor, "apply_chat_template") and _unifolm_jinja2_ok()
+        if use_chat_template:
             messages = [
                 {
                     "role": "user",
@@ -396,6 +490,114 @@ def profile_unifolm_vla0(
         failure_modes=failure_modes,
     )
     return report, records
+
+
+# ── PyTorch profiler (per-op CPU/GPU trace) ─────────────────
+def run_vla_torch_profiler(
+    model: UnifoLMVLAWrapper,
+    env: MockG1CleanTableEnv,
+    instruction: str,
+    n_warmup: int = 2,
+    n_profile_steps: int = 3,
+) -> Dict[str, Any]:
+    """
+    Trace VLA action generation with torch.profiler.
+
+    Warms up outside the profiler, then records ``n_profile_steps`` inference
+    calls inside a profiler context with CPU and (when available) CUDA activity.
+    """
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    gpu_available = torch.cuda.is_available()
+    if gpu_available:
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+
+    obs = env.reset()
+    logger.info(
+        f"torch.profiler warmup | n_warmup={n_warmup} | n_profile_steps={n_profile_steps} | GPU={gpu_available}"
+    )
+
+    for _ in range(n_warmup):
+        action, _, _ = model.infer(obs, instruction)
+        if gpu_available:
+            torch.cuda.synchronize()
+        obs, _, done, _ = env.step(action)
+        if done:
+            obs = env.reset()
+
+    trace_path = RESULTS_DIR / "vla_action_chrome_trace.json"
+    ops_txt_path = RESULTS_DIR / "vla_action_profiler_ops.txt"
+    ops_json_path = RESULTS_DIR / "vla_action_profiler_ops.json"
+    sort_key = "cuda_time_total" if gpu_available else "cpu_time_total"
+
+    with torch.profiler.profile(
+        activities=activities,
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+    ) as prof:
+        for _ in range(n_profile_steps):
+            action, _, _ = model.infer(obs, instruction)
+            if gpu_available:
+                torch.cuda.synchronize()
+            prof.step()
+            obs, _, done, _ = env.step(action)
+            if done:
+                obs = env.reset()
+
+    table = prof.key_averages().table(sort_by=sort_key, row_limit=30)
+    stack_table = prof.key_averages(group_by_stack_n=5).table(sort_by=sort_key, row_limit=30)
+    prof.export_chrome_trace(str(trace_path))
+
+    with open(ops_txt_path, "w", encoding="utf-8") as f:
+        f.write("VLA action generation — torch.profiler key averages\n")
+        f.write(f"sort_by={sort_key} | n_profile_steps={n_profile_steps}\n")
+        f.write("=" * 72 + "\n\n")
+        f.write(table)
+        f.write("\n\n--- grouped by stack ---\n\n")
+        f.write(stack_table)
+
+    op_records = []
+    for event in prof.key_averages():
+        op_records.append(
+            {
+                "name": event.key,
+                "count": event.count,
+                "cpu_time_us": event.cpu_time,
+                "cuda_time_us": getattr(event, "device_time", getattr(event, "cuda_time", 0.0)),
+                "cpu_memory_bytes": getattr(event, "cpu_memory_usage", 0),
+                "cuda_memory_bytes": getattr(
+                    event, "device_memory_usage", getattr(event, "cuda_memory_usage", 0)
+                ),
+            }
+        )
+    op_records.sort(key=lambda row: row["cuda_time_us"] if gpu_available else row["cpu_time_us"], reverse=True)
+
+    profiler_report = {
+        "model_id": model.model_id,
+        "task": TASK_NAME,
+        "instruction": instruction,
+        "n_warmup": n_warmup,
+        "n_profile_steps": n_profile_steps,
+        "gpu_available": gpu_available,
+        "sort_key": sort_key,
+        "chrome_trace": str(trace_path),
+        "operations": op_records,
+    }
+    with open(ops_json_path, "w", encoding="utf-8") as f:
+        json.dump(profiler_report, f, indent=2)
+
+    logger.info(f"torch.profiler trace saved: {trace_path}")
+    logger.info(f"torch.profiler ops saved: {ops_txt_path}, {ops_json_path}")
+
+    return {
+        "profiler": prof,
+        "table": table,
+        "stack_table": stack_table,
+        "trace_path": trace_path,
+        "ops_txt_path": ops_txt_path,
+        "ops_json_path": ops_json_path,
+        "report": profiler_report,
+    }
 
 
 # ── Plotting ─────────────────────────────────────────────────

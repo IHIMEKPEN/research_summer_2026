@@ -1,0 +1,33 @@
+# UnifoLM-VLM-Base (Qwen2.5-VL) on NVIDIA GPU.
+#
+# Do NOT mix with requirements-gpu.txt in the same venv — OpenVLA pins
+# transformers==4.40; UnifoLM needs >=4.49 for Qwen2_5_VLForConditionalGeneration.
+#
+#   cd research
+#   python3 -m venv .venv-unifolm && source .venv-unifolm/bin/activate
+#   pip install -U pip
+#   pip install -r requirements-unifolm-gpu.txt
+#   python -m ipykernel install --user --name unifolm_g1 --display-name "UnifoLM G1"
+#
+# Tested: Python 3.10, Tesla V100 32GB, Ubuntu 22.04.
+
+-r requirements.txt
+
+# PyTorch (CUDA 12.1)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+
+# Qwen2.5-VL / UnifoLM-VLM-Base (model config lists transformers 4.56+)
+transformers>=4.49.0,<4.50
+accelerate>=0.29.0
+huggingface-hub>=0.19.3,<1.0
+tokenizers>=0.19,<0.21
+safetensors>=0.4.1
+
+pillow>=10.0
+qwen-vl-utils>=0.0.8
+jinja2>=3.1.0
+
+# INT4 when VRAM is tight
+bitsandbytes>=0.43.0,<0.50
