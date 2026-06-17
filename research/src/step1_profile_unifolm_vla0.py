@@ -27,7 +27,9 @@ import logging
 import re
 import time
 import warnings
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,6 +40,7 @@ import torch
 from tqdm import tqdm
 
 from src.paths import results_path
+from src.unifolm_vla_runtime import AsyncVLARuntime, GPUActionRegister, PinnedHostTransfer
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -45,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 
 # ── Constants ────────────────────────────────────────────────
-RESULTS_DIR = results_path("step1_profiling_unifolm_vla0")
+RESULTS_BASE_DIR = results_path("step1_profiling_unifolm_vla0")
+RESULTS_DIR = RESULTS_BASE_DIR
 
 TASK_NAME = "G1_Clean_Table"
 G1_DOF = 29
@@ -86,6 +90,27 @@ class ProfilingReport:
     action_std: List[float]
     failure_rate: float
     failure_modes: Dict[str, int]
+    profiler_source: str
+    generated_at: str
+    run_tag: str
+
+
+def _normalize_profiler_source(profiler_source: str) -> str:
+    cleaned = profiler_source.strip().lower().replace(" ", "_")
+    return cleaned or "unknown_profiler"
+
+
+def make_profile_run_tag(profiler_source: str) -> str:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{_normalize_profiler_source(profiler_source)}_{ts}"
+
+
+def make_run_results_dir(profiler_source: str, run_tag: Optional[str] = None) -> Path:
+    """Create a timestamped run folder under results/step1_profiling_unifolm_vla0/."""
+    run_tag = run_tag or make_profile_run_tag(profiler_source)
+    run_dir = RESULTS_BASE_DIR / run_tag
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 # ── Mock G1 environment (sim interface) ─────────────────────
@@ -220,11 +245,19 @@ def _normalize_unifolm_config(config: Any) -> Any:
     return config
 
 
-# ── UnifoLM wrapper ──────────────────────────────────────────
+# ── UnifoLM wrapper (V100 FP16 + compile + async streams) ────────────────────
 class UnifoLMVLAWrapper:
     """
     Wrapper for unitreerobotics/UnifoLM-VLM-Base.
-    Falls back to mock inference when model cannot be loaded.
+
+    V100 optimizations (Volta SM 7.0):
+      - Native ``torch.float16`` weights + ``autocast(fp16)`` for Tensor Cores
+      - ``torch.compile(..., mode="reduce-overhead")`` to fuse fragmented kernels
+      - Pinned host memory + ``non_blocking`` H2D copies (PCIe Gen 3)
+      - GPU-resident ``infer_gpu`` hot path (no ``.item()`` / ``.cpu()`` in loop)
+      - Optional :class:`AsyncVLARuntime` for 100 Hz ESN register sampling
+
+    Falls back to mock inference when the model cannot be loaded.
     """
 
     def __init__(
@@ -233,32 +266,57 @@ class UnifoLMVLAWrapper:
         use_int4: bool = False,
         action_dim: int = G1_DOF,
         allow_mock_fallback: bool = True,
+        use_fp16: bool = True,
+        use_compile: bool = True,
+        compile_mode: str = "reduce-overhead",
+        n_warmup: int = 2,
     ):
         self.model_id = model_id
         self.use_int4 = use_int4
         self.action_dim = action_dim
         self.allow_mock_fallback = allow_mock_fallback
+        self.use_fp16 = use_fp16 and torch.cuda.is_available()
+        self.use_compile = use_compile and torch.cuda.is_available()
+        self.compile_mode = compile_mode
+        self.n_warmup = n_warmup
+
         self.model: Optional[Any] = None
         self.processor: Optional[Any] = None
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self._load_model()
+        self._compiled = False
 
-    def _load_model(self):
-        logger.info(f"Loading model: {self.model_id} | INT4={self.use_int4}")
+        cuda_ok = torch.cuda.is_available()
+        self.device = torch.device("cuda:0" if cuda_ok else "cpu")
+        self.inference_dtype = torch.float16 if self.use_fp16 else torch.float32
+        self._host_transfer = PinnedHostTransfer(self.device) if cuda_ok else None
+        self.vla_stream = torch.cuda.Stream(device=self.device) if cuda_ok else None
+
+        self.action_register: Optional[GPUActionRegister] = None
+        self.async_runtime: Optional[AsyncVLARuntime] = None
+
+        self._load_model()
+        if self.model is not None:
+            self._warmup_compiled_graph()
+
+    def _load_model(self) -> None:
+        logger.info(
+            f"Loading model: {self.model_id} | INT4={self.use_int4} | "
+            f"FP16={self.use_fp16} | compile={self.use_compile}"
+        )
         try:
             from transformers import AutoConfig, AutoProcessor
 
+            # V100: bfloat16 has no Tensor Core path — use native FP16.
             load_kwargs: Dict[str, Any] = {
                 "trust_remote_code": True,
                 "low_cpu_mem_usage": True,
-                "torch_dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                "torch_dtype": self.inference_dtype if torch.cuda.is_available() else torch.float32,
             }
             if self.use_int4:
                 from transformers import BitsAndBytesConfig
 
                 load_kwargs["quantization_config"] = BitsAndBytesConfig(
                     load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_compute_dtype=self.inference_dtype,
                 )
 
             self.processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
@@ -291,7 +349,17 @@ class UnifoLMVLAWrapper:
 
             if torch.cuda.is_available():
                 model = model.to(self.device)
-            self.model = model.eval()
+            model = model.eval()
+
+            if self.use_compile:
+                try:
+                    model = torch.compile(model, mode=self.compile_mode)
+                    self._compiled = True
+                    logger.info(f"torch.compile enabled (mode={self.compile_mode})")
+                except Exception as exc:
+                    logger.warning(f"torch.compile unavailable, running eager: {exc}")
+
+            self.model = model
             logger.info("Model loaded successfully from HuggingFace.")
 
         except Exception as e:
@@ -304,9 +372,66 @@ class UnifoLMVLAWrapper:
             self.model = None
             self.processor = None
 
+    def _warmup_compiled_graph(self) -> None:
+        """Compile/warm persistent CUDA graphs outside the real-time control loop."""
+        if self.n_warmup <= 0:
+            return
+        dummy = np.zeros((224, 224, 3), dtype=np.uint8)
+        for _ in range(self.n_warmup):
+            self.infer_gpu(dummy, "warmup")
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        logger.info(f"Warmup complete ({self.n_warmup} passes).")
+
+    def create_async_runtime(
+        self,
+        instruction: str,
+        *,
+        poll_interval_s: float = 0.0,
+        auto_start: bool = True,
+    ) -> AsyncVLARuntime:
+        """
+        Build the dual-stream framework: VLA on ``vla_stream``, ESN reads
+        :meth:`action_register.sample` at 100 Hz on the default stream.
+        """
+        if self.action_register is None:
+            self.action_register = GPUActionRegister(
+                action_dim=self.action_dim,
+                device=self.device,
+                dtype=torch.float32,
+            )
+        runtime = AsyncVLARuntime(
+            infer_fn=self.infer_gpu,
+            register=self.action_register,
+            instruction=instruction,
+            device=self.device,
+            poll_interval_s=poll_interval_s,
+        )
+        self.async_runtime = runtime
+        if auto_start:
+            runtime.start()
+        return runtime
+
     def infer(self, image: np.ndarray, instruction: str) -> Tuple[np.ndarray, int, int]:
+        """
+        Profiling / logging entry point.
+
+        Sync boundary is intentionally deferred to the single CPU copy at the
+        end — never inside the GPU forward pass.
+        """
+        action_gpu, input_tok, output_tok = self.infer_gpu(image, instruction)
+        if action_gpu.device.type == "cuda":
+            action = action_gpu.detach().float().cpu().numpy()
+        else:
+            action = action_gpu.detach().float().numpy()
+        return action, input_tok, output_tok
+
+    def infer_gpu(self, image: np.ndarray, instruction: str) -> Tuple[torch.Tensor, int, int]:
+        """
+        Hot-path inference — action tensor stays on GPU; no sync primitives.
+        """
         if self.model is None or self.processor is None:
-            return self._mock_infer(image, instruction)
+            return self._mock_infer_gpu(image, instruction)
 
         from PIL import Image as PILImage
 
@@ -319,9 +444,9 @@ class UnifoLMVLAWrapper:
         )
 
         inputs, input_len = self._prepare_inputs(prompt=prompt, image=pil_img)
-        action, output_tok = self._forward_and_parse_action(inputs=inputs)
-        action = self._reshape_action(action)
-        return action, input_len, output_tok
+        action_gpu, output_tok = self._forward_and_parse_action_gpu(inputs=inputs)
+        action_gpu = self._reshape_action_gpu(action_gpu)
+        return action_gpu, input_len, output_tok
 
     def _prepare_inputs(self, prompt: str, image: Any) -> Tuple[Dict[str, Any], int]:
         use_chat_template = hasattr(self.processor, "apply_chat_template") and _unifolm_jinja2_ok()
@@ -341,25 +466,54 @@ class UnifoLMVLAWrapper:
             inputs = self.processor(text=prompt, images=image, return_tensors="pt")
 
         input_len = int(inputs["input_ids"].shape[-1]) if "input_ids" in inputs else 0
-        if torch.cuda.is_available():
+
+        # PCIe Gen 3: pin host tensors, async H2D on the VLA stream.
+        if self._host_transfer is not None and self.vla_stream is not None:
+            with torch.cuda.stream(self.vla_stream):
+                inputs = self._host_transfer.transfer_batch(inputs)
+        elif self._host_transfer is not None:
+            inputs = self._host_transfer.transfer_batch(inputs)
+        elif torch.cuda.is_available():
             inputs = {k: v.to(self.device) if hasattr(v, "to") else v for k, v in inputs.items()}
+
         return inputs, input_len
 
-    def _forward_and_parse_action(self, inputs: Dict[str, Any]) -> Tuple[np.ndarray, int]:
-        with torch.no_grad():
+    def _forward_and_parse_action_gpu(self, inputs: Dict[str, Any]) -> Tuple[torch.Tensor, int]:
+        stream_ctx = torch.cuda.stream(self.vla_stream) if self.vla_stream is not None else nullcontext()
+        autocast_ctx = (
+            torch.cuda.amp.autocast(dtype=torch.float16)
+            if self.use_fp16 and torch.cuda.is_available()
+            else nullcontext()
+        )
+
+        with torch.no_grad(), stream_ctx, autocast_ctx:
             if hasattr(self.model, "predict_action"):
                 action = self.model.predict_action(**inputs, do_sample=False)
-                action_arr = np.asarray(action, dtype=np.float32).flatten()
-                output_tok = len(action_arr)
-                return action_arr, output_tok
+                action_t = action if isinstance(action, torch.Tensor) else torch.as_tensor(action)
+                action_t = action_t.to(device=self.device, dtype=torch.float32)
+                output_tok = int(action_t.numel())
+                return action_t, output_tok
 
             generated = self.model.generate(**inputs, max_new_tokens=96, do_sample=False)
 
-        input_ids = inputs.get("input_ids", None)
-        output_tok = int(generated.shape[-1] - input_ids.shape[-1]) if input_ids is not None else int(generated.shape[-1])
+        input_ids = inputs.get("input_ids")
+        output_tok = (
+            int(generated.shape[-1] - input_ids.shape[-1])
+            if input_ids is not None
+            else int(generated.shape[-1])
+        )
+
+        # Text decode is CPU-bound; defer to after GPU generation completes.
+        # Only sync point for autoregressive models — isolated from matmul hot path.
+        if self.vla_stream is not None:
+            self.vla_stream.synchronize()
+
         decoded = self.processor.batch_decode(generated, skip_special_tokens=True)[0]
-        action_arr = self._parse_action_text(decoded)
-        return action_arr, output_tok
+        action_cpu = self._parse_action_text(decoded)
+        action_gpu = torch.from_numpy(action_cpu).to(
+            device=self.device, dtype=torch.float32, non_blocking=True
+        )
+        return action_gpu, output_tok
 
     def _parse_action_text(self, text: str) -> np.ndarray:
         bracket_match = re.search(r"\[([^\]]+)\]", text, flags=re.DOTALL)
@@ -369,23 +523,28 @@ class UnifoLMVLAWrapper:
         numbers = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
         if not numbers:
             raise ValueError("Model output did not contain numeric action values.")
-        action = np.array([float(x) for x in numbers], dtype=np.float32)
-        return action
+        return np.array([float(x) for x in numbers], dtype=np.float32)
 
-    def _reshape_action(self, action: np.ndarray) -> np.ndarray:
-        if len(action) < self.action_dim:
-            action = np.pad(action, (0, self.action_dim - len(action)))
-        else:
-            action = action[: self.action_dim]
-        return action
+    def _reshape_action_gpu(self, action: torch.Tensor) -> torch.Tensor:
+        flat = action.flatten()
+        if flat.numel() < self.action_dim:
+            flat = torch.nn.functional.pad(flat, (0, self.action_dim - flat.numel()))
+        return flat[: self.action_dim]
 
     def _mock_infer(self, image: np.ndarray, instruction: str) -> Tuple[np.ndarray, int, int]:
+        action_gpu, n_in, n_out = self._mock_infer_gpu(image, instruction)
+        return action_gpu.cpu().numpy(), n_in, n_out
+
+    def _mock_infer_gpu(self, image: np.ndarray, instruction: str) -> Tuple[torch.Tensor, int, int]:
         base_latency = np.random.normal(0.42, 0.05)
         time.sleep(max(0.25, base_latency))
         action = np.random.uniform(-0.5, 0.5, self.action_dim).astype(np.float32)
+        action_gpu = torch.from_numpy(action)
+        if torch.cuda.is_available():
+            action_gpu = action_gpu.pin_memory().to(self.device, non_blocking=True)
         n_input_tok = 280 + len(instruction.split())
         n_output_tok = self.action_dim
-        return action, n_input_tok, n_output_tok
+        return action_gpu, n_input_tok, n_output_tok
 
 
 # ── Core profiling routine ───────────────────────────────────
@@ -394,11 +553,17 @@ def profile_unifolm_vla0(
     env: MockG1CleanTableEnv,
     n_trials: int = 100,
     instruction: str = "Clean the table by moving all clutter items into the bin.",
+    profiler_source: str = "pytorch_profiler",
+    run_tag: Optional[str] = None,
 ) -> Tuple[ProfilingReport, List[InferenceRecord]]:
     records: List[InferenceRecord] = []
     failure_modes: Dict[str, int] = {}
+    profiler_source = _normalize_profiler_source(profiler_source)
+    run_tag = run_tag or make_profile_run_tag(profiler_source)
+    generated_at = datetime.now().isoformat(timespec="seconds")
 
     gpu_available = torch.cuda.is_available()
+    use_nvtx = gpu_available and hasattr(torch.cuda, "nvtx")
     logger.info(f"Starting profiling | task={TASK_NAME} | n_trials={n_trials} | GPU={gpu_available}")
 
     obs = env.reset()
@@ -425,6 +590,8 @@ def profile_unifolm_vla0(
         input_tok = output_tok = 0
 
         t0 = time.perf_counter()
+        if use_nvtx:
+            torch.cuda.nvtx.range_push("vla_action_generation")
         try:
             action, input_tok, output_tok = model.infer(img, instruction)
         except Exception as e:
@@ -432,6 +599,9 @@ def profile_unifolm_vla0(
             failure_reason = type(e).__name__
             failure_modes[failure_reason] = failure_modes.get(failure_reason, 0) + 1
             logger.warning(f"  Trial {i} failed ({condition}): {e}")
+        finally:
+            if use_nvtx:
+                torch.cuda.nvtx.range_pop()
         t1 = time.perf_counter()
 
         latency_ms = (t1 - t0) * 1000.0
@@ -488,6 +658,9 @@ def profile_unifolm_vla0(
         action_std=actions.std(axis=0).tolist() if len(actions) > 0 else [],
         failure_rate=failure_rate,
         failure_modes=failure_modes,
+        profiler_source=profiler_source,
+        generated_at=generated_at,
+        run_tag=run_tag,
     )
     return report, records
 
@@ -499,6 +672,9 @@ def run_vla_torch_profiler(
     instruction: str,
     n_warmup: int = 2,
     n_profile_steps: int = 3,
+    profiler_source: str = "pytorch_profiler",
+    run_tag: Optional[str] = None,
+    results_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Trace VLA action generation with torch.profiler.
@@ -508,6 +684,11 @@ def run_vla_torch_profiler(
     """
     activities = [torch.profiler.ProfilerActivity.CPU]
     gpu_available = torch.cuda.is_available()
+    profiler_source = _normalize_profiler_source(profiler_source)
+    run_tag = run_tag or make_profile_run_tag(profiler_source)
+    results_dir = results_dir or make_run_results_dir(profiler_source, run_tag)
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    use_nvtx = gpu_available and hasattr(torch.cuda, "nvtx")
     if gpu_available:
         activities.append(torch.profiler.ProfilerActivity.CUDA)
 
@@ -517,16 +698,20 @@ def run_vla_torch_profiler(
     )
 
     for _ in range(n_warmup):
+        if use_nvtx:
+            torch.cuda.nvtx.range_push("vla_action_generation")
         action, _, _ = model.infer(obs, instruction)
+        if use_nvtx:
+            torch.cuda.nvtx.range_pop()
         if gpu_available:
             torch.cuda.synchronize()
         obs, _, done, _ = env.step(action)
         if done:
             obs = env.reset()
 
-    trace_path = RESULTS_DIR / "vla_action_chrome_trace.json"
-    ops_txt_path = RESULTS_DIR / "vla_action_profiler_ops.txt"
-    ops_json_path = RESULTS_DIR / "vla_action_profiler_ops.json"
+    trace_path = results_dir / "vla_action_chrome_trace.json"
+    ops_txt_path = results_dir / "vla_action_profiler_ops.txt"
+    ops_json_path = results_dir / "vla_action_profiler_ops.json"
     sort_key = "cuda_time_total" if gpu_available else "cpu_time_total"
 
     with torch.profiler.profile(
@@ -536,7 +721,11 @@ def run_vla_torch_profiler(
         with_stack=True,
     ) as prof:
         for _ in range(n_profile_steps):
+            if use_nvtx:
+                torch.cuda.nvtx.range_push("vla_action_generation")
             action, _, _ = model.infer(obs, instruction)
+            if use_nvtx:
+                torch.cuda.nvtx.range_pop()
             if gpu_available:
                 torch.cuda.synchronize()
             prof.step()
@@ -550,6 +739,9 @@ def run_vla_torch_profiler(
 
     with open(ops_txt_path, "w", encoding="utf-8") as f:
         f.write("VLA action generation — torch.profiler key averages\n")
+        f.write(f"profiler_source={profiler_source}\n")
+        f.write(f"generated_at={generated_at}\n")
+        f.write(f"run_tag={run_tag}\n")
         f.write(f"sort_by={sort_key} | n_profile_steps={n_profile_steps}\n")
         f.write("=" * 72 + "\n\n")
         f.write(table)
@@ -579,6 +771,10 @@ def run_vla_torch_profiler(
         "n_warmup": n_warmup,
         "n_profile_steps": n_profile_steps,
         "gpu_available": gpu_available,
+        "profiler_source": profiler_source,
+        "generated_at": generated_at,
+        "run_tag": run_tag,
+        "results_dir": str(results_dir),
         "sort_key": sort_key,
         "chrome_trace": str(trace_path),
         "operations": op_records,
@@ -596,12 +792,17 @@ def run_vla_torch_profiler(
         "trace_path": trace_path,
         "ops_txt_path": ops_txt_path,
         "ops_json_path": ops_json_path,
+        "results_dir": results_dir,
         "report": profiler_report,
     }
 
 
 # ── Plotting ─────────────────────────────────────────────────
-def plot_profiling_report(report: ProfilingReport, records: List[InferenceRecord]):
+def plot_profiling_report(
+    report: ProfilingReport,
+    records: List[InferenceRecord],
+    results_dir: Optional[Path] = None,
+):
     latencies = [r.latency_ms for r in records if not r.failed]
     trial_idx = [r.trial for r in records if not r.failed]
     inst_hz = [1000.0 / l for l in latencies]
@@ -609,7 +810,7 @@ def plot_profiling_report(report: ProfilingReport, records: List[InferenceRecord
     fig = plt.figure(figsize=(18, 10))
     fig.suptitle(
         f"UnifoLM-VLA-0 Inference Profile — {report.model_id}\n"
-        f"Task={report.task} | n={report.n_trials} trials | Week 1–2 Deliverable",
+        f"Task={report.task} | n={report.n_trials} trials | Source={report.profiler_source} | Week 1–2 Deliverable",
         fontsize=13,
         fontweight="bold",
     )
@@ -664,6 +865,10 @@ def plot_profiling_report(report: ProfilingReport, records: List[InferenceRecord
         f"P95          : {report.p95_latency_ms:.1f} ms\n"
         f"P99          : {report.p99_latency_ms:.1f} ms\n"
         f"{'─' * 30}\n"
+        f"Profiler src : {report.profiler_source}\n"
+        f"Generated at : {report.generated_at}\n"
+        f"Run tag      : {report.run_tag}\n"
+        f"{'─' * 30}\n"
         f"Control rate : {report.mean_hz:.2f} Hz\n"
         f"G1 target    : {TARGET_HZ} Hz\n"
         f"Freq. gap    : {report.frequency_gap:.1f}x\n"
@@ -683,29 +888,39 @@ def plot_profiling_report(report: ProfilingReport, records: List[InferenceRecord
         bbox=dict(boxstyle="round", facecolor="#FFF9C4", alpha=0.8),
     )
 
-    out_path = RESULTS_DIR / "unifolm_vla0_profiling_report.pdf"
+    results_dir = results_dir or make_run_results_dir(report.profiler_source, report.run_tag)
+    out_path = results_dir / "unifolm_vla0_profiling_report.pdf"
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.savefig(str(out_path).replace(".pdf", ".png"), dpi=150, bbox_inches="tight")
     logger.info(f"Figure saved: {out_path}")
     plt.close()
+    return {"pdf_path": out_path, "png_path": Path(str(out_path).replace(".pdf", ".png"))}
 
 
 # ── Save JSON log ────────────────────────────────────────────
-def save_logs(report: ProfilingReport, records: List[InferenceRecord]):
-    log_path = RESULTS_DIR / "inference_log.json"
+def save_logs(
+    report: ProfilingReport,
+    records: List[InferenceRecord],
+    results_dir: Optional[Path] = None,
+):
+    results_dir = results_dir or make_run_results_dir(report.profiler_source, report.run_tag)
+    log_path = results_dir / "inference_log.json"
     with open(log_path, "w", encoding="utf-8") as f:
         json.dump([asdict(r) for r in records], f, indent=2)
 
-    report_path = RESULTS_DIR / "profiling_report.json"
+    report_path = results_dir / "profiling_report.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(asdict(report), f, indent=2)
 
-    txt_path = RESULTS_DIR / "profiling_summary.txt"
+    txt_path = results_dir / "profiling_summary.txt"
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write("=" * 60 + "\n")
         f.write("UnifoLM-VLA-0 Profiling Report — Week 1-2 Deliverable\n")
         f.write(f"Model: {report.model_id}\n")
         f.write(f"Task : {report.task}\n")
+        f.write(f"Profiler source : {report.profiler_source}\n")
+        f.write(f"Generated at    : {report.generated_at}\n")
+        f.write(f"Run tag         : {report.run_tag}\n")
         f.write("=" * 60 + "\n\n")
         f.write("Latency (ms):\n")
         f.write(f"  Mean   : {report.mean_latency_ms:.2f} ± {report.std_latency_ms:.2f}\n")
@@ -721,6 +936,12 @@ def save_logs(report: ProfilingReport, records: List[InferenceRecord]):
         f.write(f"  Modes  : {report.failure_modes}\n")
 
     logger.info(f"Logs saved: {log_path}, {report_path}, {txt_path}")
+    return {
+        "log_path": log_path,
+        "report_path": report_path,
+        "summary_path": txt_path,
+        "results_dir": results_dir,
+    }
 
 
 # ── Main ─────────────────────────────────────────────────────
@@ -740,6 +961,16 @@ def main():
         action="store_true",
         help="Fail if model load fails (do not silently use mock)",
     )
+    parser.add_argument(
+        "--no-fp16",
+        action="store_true",
+        help="Disable V100 FP16 Tensor Core path (not recommended on Volta)",
+    )
+    parser.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Disable torch.compile kernel fusion",
+    )
     args = parser.parse_args()
 
     logger.info("=" * 60)
@@ -752,17 +983,25 @@ def main():
         use_int4=args.use_int4,
         action_dim=G1_DOF,
         allow_mock_fallback=not args.no_mock_fallback,
+        use_fp16=not args.no_fp16,
+        use_compile=not args.no_compile,
     )
+
+    profiler_source = "pytorch_profiler"
+    run_tag = make_profile_run_tag(profiler_source)
+    run_results_dir = make_run_results_dir(profiler_source, run_tag)
 
     report, records = profile_unifolm_vla0(
         model=model,
         env=env,
         n_trials=args.n_trials,
         instruction=args.instruction,
+        profiler_source=profiler_source,
+        run_tag=run_tag,
     )
 
-    save_logs(report, records)
-    plot_profiling_report(report, records)
+    log_paths = save_logs(report, records, results_dir=run_results_dir)
+    fig_paths = plot_profiling_report(report, records, results_dir=run_results_dir)
 
     print("\n" + "=" * 60)
     print("  PROFILING COMPLETE — Week 1-2 Deliverable")
@@ -775,7 +1014,12 @@ def main():
     print(f"  Failure rate   : {report.failure_rate * 100:.1f}%")
     print(f"  Failure modes  : {report.failure_modes}")
     print(f"  GPU memory     : {report.mean_gpu_mem_gb:.2f} GB")
-    print(f"\n  Outputs saved to: {RESULTS_DIR.resolve()}")
+    print(f"  Profiler source: {report.profiler_source}")
+    print(f"  Generated at   : {report.generated_at}")
+    print(f"  Run tag        : {report.run_tag}")
+    print(f"  Report JSON    : {log_paths['report_path']}")
+    print(f"  Figure (PNG)   : {fig_paths['png_path']}")
+    print(f"\n  Outputs saved to: {run_results_dir.resolve()}")
     print("=" * 60)
 
     return report
