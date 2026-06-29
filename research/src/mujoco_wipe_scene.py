@@ -1,0 +1,260 @@
+"""
+MuJoCo wipe-table scene extras: mocap cloth, Dex1 gripper-driven grasp, table stains.
+
+Used by Step 4 full MuJoCo evaluation (not Step 3 dual-process integration).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from pathlib import Path
+from typing import Optional, Tuple
+
+import mujoco
+import numpy as np
+
+from src.vla_ee_bridge import resolve_robot_mjcf
+
+CLOTH_BODY_NAME = "wipe_cloth"
+CLOTH_GEOM_NAME = "wipe_cloth_geom"
+RIGHT_HAND_BODY = "right_wrist_yaw_link"
+LEFT_HAND_BODY = "left_wrist_yaw_link"
+
+# Dex1 gripper width (rad): ~4.5 open, ~0.45 closed on G1_Dex1_Wipe_Table.
+GRIPPER_OPEN_TYPICAL = 4.5
+GRIPPER_CLOSED_TYPICAL = 0.45
+GRIPPER_GRASP_THRESHOLD = 2.0
+
+CLOTH_TABLE_POS = np.array([0.42, 0.05, 0.775], dtype=np.float64)
+TABLE_TOP_Z = 0.775
+CLOTH_HAND_OFFSET = np.array([0.085, -0.004, -0.045], dtype=np.float64)
+
+GRASP_PROXIMITY_M = 0.14
+ATTACH_BLEND_STEPS = 12
+RELEASE_BLEND_STEPS = 10
+
+
+class ClothState(Enum):
+    ON_TABLE = auto()
+    ATTACHING = auto()
+    HELD = auto()
+    RELEASING = auto()
+
+
+def build_wipe_table_scene_model(
+    robot_mjcf: Path,
+    *,
+    interactive_cloth: bool = True,
+) -> mujoco.MjModel:
+    """Compile G1 + table; cloth is a mocap body when ``interactive_cloth``."""
+    robot_mjcf = robot_mjcf.resolve()
+    if interactive_cloth:
+        cloth_xml = f"""
+    <body name="{CLOTH_BODY_NAME}" mocap="true" pos="{CLOTH_TABLE_POS[0]} {CLOTH_TABLE_POS[1]} {CLOTH_TABLE_POS[2]}">
+      <geom name="{CLOTH_GEOM_NAME}" type="box" size="0.12 0.08 0.004"
+            rgba="0.92 0.88 0.55 1" friction="0.9 0.3 0.01" mass="0.05"/>
+    </body>"""
+    else:
+        cloth_xml = """
+    <geom name="wipe_cloth" type="box" pos="0.42 0.05 0.775" size="0.12 0.08 0.004"
+          rgba="0.92 0.88 0.55 1"/>"""
+
+    scene_xml = f"""
+<mujoco model="g1_wipe_table_scene">
+  <include file="{robot_mjcf.name}"/>
+  <worldbody>
+    <body name="wipe_table" pos="0.45 0.0 0.72">
+      <geom name="table_top" type="box" size="0.45 0.35 0.025" rgba="0.55 0.38 0.22 1"/>
+      <geom name="table_leg_fl" type="cylinder" pos="0.35 0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_fr" type="cylinder" pos="0.35 -0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_bl" type="cylinder" pos="-0.35 0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_br" type="cylinder" pos="-0.35 -0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
+    </body>
+    {cloth_xml}
+  </worldbody>
+</mujoco>
+"""
+    scene_path = robot_mjcf.parent / "_g1_wipe_table_scene_runtime.xml"
+    scene_path.write_text(scene_xml, encoding="utf-8")
+    try:
+        return mujoco.MjModel.from_xml_path(str(scene_path))
+    finally:
+        scene_path.unlink(missing_ok=True)
+
+
+def _body_id(model: mujoco.MjModel, name: str) -> int:
+    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+    if bid < 0:
+        raise ValueError(f"Body not found in MJCF: {name}")
+    return bid
+
+
+def _mat_to_quat(rot_flat: np.ndarray) -> np.ndarray:
+    quat = np.zeros(4, dtype=np.float64)
+    mujoco.mju_mat2Quat(quat, np.asarray(rot_flat, dtype=np.float64).reshape(9))
+    return quat
+
+
+def _slerp_quat(q0: np.ndarray, q1: np.ndarray, alpha: float) -> np.ndarray:
+    q0 = np.asarray(q0, dtype=np.float64)
+    q1 = np.asarray(q1, dtype=np.float64)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    if dot > 0.9995:
+        out = q0 + alpha * (q1 - q0)
+        return out / np.linalg.norm(out)
+    theta = np.arccos(np.clip(dot, -1.0, 1.0))
+    s = np.sin(theta)
+    w0 = np.sin((1.0 - alpha) * theta) / s
+    w1 = np.sin(alpha * theta) / s
+    return w0 * q0 + w1 * q1
+
+
+@dataclass
+class WipeClothController:
+    """
+    Mocap cloth with proximity-gated grasp and blended attach/release.
+
+    Avoids instant teleport: cloth lerps from table to hand over ``attach_blend_steps``.
+    """
+
+    model: mujoco.MjModel
+    data: mujoco.MjData
+    grasp_threshold: float = GRIPPER_GRASP_THRESHOLD
+    grasp_proximity_m: float = GRASP_PROXIMITY_M
+    attach_blend_steps: int = ATTACH_BLEND_STEPS
+    release_blend_steps: int = RELEASE_BLEND_STEPS
+    table_pos: np.ndarray = CLOTH_TABLE_POS
+    hand_offset: np.ndarray = CLOTH_HAND_OFFSET
+    _cloth_body_id: int = 0
+    _cloth_mocap_id: int = -1
+    _right_hand_id: int = 0
+    _state: ClothState = ClothState.ON_TABLE
+    _blend_step: int = 0
+    _blend_total: int = 1
+    _blend_start_pos: np.ndarray = field(default_factory=lambda: CLOTH_TABLE_POS.copy())
+    _blend_start_quat: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
+    _cloth_pos: np.ndarray = field(default_factory=lambda: CLOTH_TABLE_POS.copy())
+    _cloth_quat: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
+    is_attached: bool = False
+    last_attach_distance_m: float = float("nan")
+
+    def __post_init__(self) -> None:
+        self._cloth_body_id = _body_id(self.model, CLOTH_BODY_NAME)
+        self._cloth_mocap_id = int(self.model.body_mocapid[self._cloth_body_id])
+        if self._cloth_mocap_id < 0:
+            raise ValueError(f"Body {CLOTH_BODY_NAME} is not a mocap body.")
+        self._right_hand_id = _body_id(self.model, RIGHT_HAND_BODY)
+        self.table_pos = np.asarray(self.table_pos, dtype=np.float64)
+        self.hand_offset = np.asarray(self.hand_offset, dtype=np.float64)
+        self.reset()
+
+    def reset(self) -> None:
+        self._state = ClothState.ON_TABLE
+        self._blend_step = 0
+        self.is_attached = False
+        self.last_attach_distance_m = float("nan")
+        self._cloth_pos = self.table_pos.copy()
+        self._cloth_quat = np.array([1.0, 0.0, 0.0, 0.0])
+        self._apply_mocap_pose(self._cloth_pos, self._cloth_quat)
+
+    def _apply_mocap_pose(self, pos: np.ndarray, quat: np.ndarray) -> None:
+        self.data.mocap_pos[self._cloth_mocap_id] = np.asarray(pos, dtype=np.float64).reshape(3)
+        self.data.mocap_quat[self._cloth_mocap_id] = np.asarray(quat, dtype=np.float64).reshape(4)
+        self._cloth_pos = np.asarray(pos, dtype=np.float64).reshape(3).copy()
+        self._cloth_quat = np.asarray(quat, dtype=np.float64).reshape(4).copy()
+
+    def right_hand_pos(self) -> np.ndarray:
+        return self.data.xpos[self._right_hand_id].copy()
+
+    def cloth_position(self) -> np.ndarray:
+        return self._cloth_pos.copy()
+
+    def hand_to_cloth_distance(self) -> float:
+        target_pos, _ = self._hand_target_pose()
+        return float(np.linalg.norm(target_pos - self._cloth_pos))
+
+    def _hand_target_pose(self) -> Tuple[np.ndarray, np.ndarray]:
+        rot = self.data.xmat[self._right_hand_id].reshape(3, 3)
+        pos = self.data.xpos[self._right_hand_id] + rot @ self.hand_offset
+        quat = _mat_to_quat(self.data.xmat[self._right_hand_id])
+        return pos, quat
+
+    def _table_pose(self) -> Tuple[np.ndarray, np.ndarray]:
+        return self.table_pos.copy(), np.array([1.0, 0.0, 0.0, 0.0])
+
+    def _start_blend(self, target_state: ClothState, total_steps: int) -> None:
+        self._state = target_state
+        self._blend_step = 0
+        self._blend_start_pos = self._cloth_pos.copy()
+        self._blend_start_quat = self._cloth_quat.copy()
+        self._blend_total = max(1, total_steps)
+
+    def _tick_blend(self, target_pos: np.ndarray, target_quat: np.ndarray) -> None:
+        self._blend_step += 1
+        alpha = min(1.0, self._blend_step / self._blend_total)
+        pos = (1.0 - alpha) * self._blend_start_pos + alpha * target_pos
+        quat = _slerp_quat(self._blend_start_quat, target_quat, alpha)
+        self._apply_mocap_pose(pos, quat)
+
+    def wants_grasp(self, right_gripper: float) -> bool:
+        closed = float(right_gripper) < self.grasp_threshold
+        near = self.hand_to_cloth_distance() < self.grasp_proximity_m
+        return closed and near
+
+    def wants_release(self, right_gripper: float) -> bool:
+        return float(right_gripper) >= self.grasp_threshold
+
+    def update(self, right_gripper: float, left_gripper: float) -> bool:
+        """Advance cloth state machine; returns whether cloth is held on the hand."""
+        del left_gripper
+        hand_pos, hand_quat = self._hand_target_pose()
+        table_pos, table_quat = self._table_pose()
+
+        if self._state == ClothState.ON_TABLE:
+            self._apply_mocap_pose(table_pos, table_quat)
+            self.is_attached = False
+            if self.wants_grasp(right_gripper):
+                self.last_attach_distance_m = self.hand_to_cloth_distance()
+                self._start_blend(ClothState.ATTACHING, self.attach_blend_steps)
+
+        elif self._state == ClothState.ATTACHING:
+            self._tick_blend(hand_pos, hand_quat)
+            if self._blend_step >= self._blend_total:
+                self._state = ClothState.HELD
+                self.is_attached = True
+            elif self.wants_release(right_gripper):
+                self._start_blend(ClothState.RELEASING, self.release_blend_steps)
+
+        elif self._state == ClothState.HELD:
+            self._apply_mocap_pose(hand_pos, hand_quat)
+            self.is_attached = True
+            if self.wants_release(right_gripper):
+                self._start_blend(ClothState.RELEASING, self.release_blend_steps)
+
+        elif self._state == ClothState.RELEASING:
+            self._tick_blend(table_pos, table_quat)
+            if self._blend_step >= self._blend_total:
+                self._state = ClothState.ON_TABLE
+                self.is_attached = False
+            elif self.wants_grasp(right_gripper):
+                self._start_blend(ClothState.ATTACHING, self.attach_blend_steps)
+
+        return self.is_attached
+
+    def gripper_openness(self, gripper_width: float) -> float:
+        width = float(gripper_width)
+        span = GRIPPER_OPEN_TYPICAL - GRIPPER_CLOSED_TYPICAL
+        return float(np.clip((width - GRIPPER_CLOSED_TYPICAL) / span, 0.0, 1.0))
+
+
+def make_wipe_scene_env_model(
+    mjcf_path: Optional[Path] = None,
+    *,
+    interactive_cloth: bool = True,
+) -> mujoco.MjModel:
+    robot_path = mjcf_path if mjcf_path and mjcf_path.is_file() else resolve_robot_mjcf()
+    return build_wipe_table_scene_model(robot_path, interactive_cloth=interactive_cloth)

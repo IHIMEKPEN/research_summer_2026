@@ -21,6 +21,15 @@ __pycache__/
 research/results/
 research/models/
 
+# MuJoCo / sim logs and generated scene XML
+research/MUJOCO_LOG.TXT
+research/**/*_runtime.xml
+
+# Large media (videos live under results/; ignore if copied elsewhere)
+research/**/*.mp4
+research/**/*.nsys-rep
+research/**/*.qdrep
+
 # OpenVLA upstream clone (install separately — see README)
 research/openvla/
 
