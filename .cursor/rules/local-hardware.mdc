@@ -1,0 +1,31 @@
+---
+description: Local DGX Station hardware and storage constraints for this project
+alwaysApply: true
+---
+
+# Local Hardware (NVIDIA DGX Station)
+
+Host: `dxs4-DGX-Station` — Ubuntu 22.04.5 LTS
+
+## Compute
+
+- **CPU**: Intel Xeon E5-2698 v4 @ 2.20 GHz (boost to 3.6 GHz) — 20 cores / 40 threads
+- **RAM**: ~252 GiB (no swap)
+- **GPU**: 4× NVIDIA Tesla V100-DGXS-32GB (128 GB VRAM total)
+- **Driver / CUDA**: NVIDIA 580.159.03, CUDA 13.0
+
+Prefer multi-GPU when training/eval can use it. Check `nvidia-smi` before long jobs; GPU 0 often has display + leftover processes.
+
+## Storage
+
+| Mount | Device | Size | Notes |
+|-------|--------|------|-------|
+| `/` | `/dev/sda2` (Samsung SSD) | ~1.8 TB | Often near full (~25 GB free). Home and this repo live here. |
+| `/raid` | `/dev/md0` RAID0 (3× Samsung SSDs) | ~5.2 TB | Preferred for large data (~3.7 TB free typical). |
+| `/boot/efi` | `/dev/sda1` | 487 MB | Boot only |
+
+**Actionable rules:**
+
+- Put large datasets, checkpoints, logs, and MuJoCo/RL artifacts under `/raid` (or a project subdir there), not under `/home` or the repo on `/`.
+- Do not assume free space on `/`; verify with `df -h` before downloads or long runs.
+- Workspace path: `/home/aihimekpen/research_summer_2026` (on root disk — keep the repo itself small).

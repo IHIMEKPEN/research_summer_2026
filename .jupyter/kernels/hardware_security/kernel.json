@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "/home/aihimekpen/research_summer_2026/hardware_security/.venv/bin/python",
+    "-m",
+    "ipykernel_launcher",
+    "-f",
+    "{connection_file}"
+  ],
+  "display_name": "Python (hardware_security GPU)",
+  "language": "python",
+  "metadata": { "debugger": true }
+}
