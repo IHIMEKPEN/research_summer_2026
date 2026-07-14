@@ -45,3 +45,6 @@ papers/**/*.synctex.gz
 
 # Misc caches
 others/__pycache__/
+
+# Separate repo (sibling under ~); do not nest here
+hardware_security/
