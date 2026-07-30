@@ -9,13 +9,14 @@ Author: Osemudiamen Andrew Ihimekpen | PVAMU CREDIT Center
 Replays ``G1_Dex1_Wipe_Table`` through the Step 2 CUDA ESN with:
   - GT proprio + 2 Hz held VLA tokens (same as ESN training)
   - Mocap cloth grasped when Dex1 right gripper closes
-  - Kinematic or PD control + 60 FPS benchmark video
+  - Kinematic or PD control + single-episode benchmark video (default)
 
 Step 3 remains **dual-process only** (VLA @ 2 Hz + ESN @ 100 Hz).
 
 Usage (from research/):
   python3 -m src.step4_mujoco_evaluation --episode 0
   python3 -m src.step4_mujoco_evaluation --control_mode pd --duration_s 12
+  python3 -m src.step4_mujoco_evaluation --duration_s 60 --loop   # multi-loop (large video)
 """
 
 from __future__ import annotations
@@ -35,7 +36,8 @@ from src.mujoco_wipe_scene import (
     RIGHT_HAND_BODY,
     WipeClothController,
     make_wipe_scene_env_model,
-)from src.wipe_task_metrics import WipeTaskMetrics, WipeTaskMetricsRecorder
+)
+from src.wipe_task_metrics import WipeTaskMetrics, WipeTaskMetricsRecorder
 from src.paths import models_path, results_path
 from src.step2_esn_cuda_ridge import (
     CONTROL_HZ,
@@ -60,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 RESULTS_DIR = results_path("step4_mujoco_evaluation")
 ControlMode = Literal["kinematic", "pd"]
+# Hard cap when explicitly looping; default run is a single episode (~12 s).
 MAX_DURATION_S = 60.0
 
 
@@ -91,7 +94,8 @@ class MuJoCoEvalConfig:
     mjcf_path: Path
     esn_checkpoint: str
     init_episode: int = 0
-    duration_s: float = MAX_DURATION_S
+    # None → run exactly one episode (recommended for video export).
+    duration_s: Optional[float] = None
     control_hz: float = CONTROL_HZ
     vla_hz: float = 2.0
     control_mode: ControlMode = "kinematic"
@@ -100,7 +104,7 @@ class MuJoCoEvalConfig:
     video_path: Optional[Path] = None
     video_fps: float = VIDEO_FPS
     device: str = "cuda"
-    loop_episode: bool = True
+    loop_episode: bool = False
 
 
 class G1WipeTableEvalEnv(G1MuJoCoEnv):
@@ -155,7 +159,7 @@ class MuJoCoWipeEvaluator:
 
     def run(self) -> MuJoCoEvalStats:
         cfg = self.config
-        if cfg.duration_s > MAX_DURATION_S:
+        if cfg.duration_s is not None and cfg.duration_s > MAX_DURATION_S:
             raise ValueError(f"duration_s={cfg.duration_s} exceeds MAX_DURATION_S={MAX_DURATION_S}")
         if not torch.cuda.is_available() and cfg.device.startswith("cuda"):
             raise RuntimeError("CUDA required.")
@@ -176,21 +180,27 @@ class MuJoCoWipeEvaluator:
         )
         traj_steps = int(ground_truth.shape[0])
         episode_duration_s = traj_steps / cfg.control_hz
-        sim_steps = int(round(cfg.duration_s * cfg.control_hz))
+        # Default: one episode only (avoids multi-loop 60 s / multi-hundred-MB videos).
+        if cfg.duration_s is None:
+            duration_s = episode_duration_s
+        else:
+            duration_s = float(cfg.duration_s)
+        sim_steps = int(round(duration_s * cfg.control_hz))
         if sim_steps > traj_steps and not cfg.loop_episode:
             logger.warning(
-                "duration_s=%.1fs exceeds episode length %.2fs — capping to episode.",
-                cfg.duration_s,
+                "duration_s=%.1fs exceeds episode length %.2fs — capping to one episode.",
+                duration_s,
                 episode_duration_s,
             )
             sim_steps = traj_steps
-        episode_loops = max(1, int(np.ceil(sim_steps / traj_steps)))
+            duration_s = episode_duration_s
+        episode_loops = max(1, int(np.ceil(sim_steps / max(traj_steps, 1))))
         logger.info(
             "Episode %d: %d steps (%.2fs). Target %.1fs → %d sim steps (%d loop%s).",
             cfg.init_episode,
             traj_steps,
             episode_duration_s,
-            cfg.duration_s,
+            duration_s,
             sim_steps,
             episode_loops,
             "s" if episode_loops != 1 else "",
@@ -305,8 +315,15 @@ class MuJoCoWipeEvaluator:
         stats.task_metrics = metrics_rec.finalize()
 
         if cfg.record_video and video_frames:
-            save_video_mp4(video_frames, video_path, source_hz=cfg.control_hz, target_fps=cfg.video_fps)
-            stats.video_path = str(video_path)
+            try:
+                save_video_mp4(video_frames, video_path, source_hz=cfg.control_hz, target_fps=cfg.video_fps)
+                # Prefer MP4; GIF fallback uses the same stem.
+                if video_path.is_file():
+                    stats.video_path = str(video_path)
+                elif video_path.with_suffix(".gif").is_file():
+                    stats.video_path = str(video_path.with_suffix(".gif"))
+            except Exception as exc:
+                logger.warning("Video export failed (metrics still valid): %s", exc)
 
         tm = stats.task_metrics
         logger.info(
@@ -351,10 +368,19 @@ def main() -> None:
     parser.add_argument("--mjcf", type=str, default=None)
     parser.add_argument("--esn_checkpoint", type=str, default=str(models_path("esn_cuda_ridge")))
     parser.add_argument("--episode", type=int, default=0)
-    parser.add_argument("--duration_s", type=float, default=MAX_DURATION_S,
-                        help=f"Video/sim duration in seconds (max {MAX_DURATION_S:.0f}s)")
-    parser.add_argument("--no_loop", action="store_true",
-                        help="Do not loop episode when duration exceeds episode length")
+    parser.add_argument(
+        "--duration_s",
+        type=float,
+        default=None,
+        help="Sim/video duration in seconds (default: one episode; max "
+        f"{MAX_DURATION_S:.0f}s). Use with --loop to repeat the episode.",
+    )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="Loop the episode when duration_s exceeds episode length "
+        "(default: single episode only)",
+    )
     parser.add_argument("--control_hz", type=float, default=CONTROL_HZ)
     parser.add_argument("--vla_hz", type=float, default=2.0)
     parser.add_argument("--control_mode", choices=("kinematic", "pd"), default="kinematic")
@@ -378,7 +404,7 @@ def main() -> None:
         record_video=not args.no_video,
         video_fps=args.video_fps,
         device=args.device,
-        loop_episode=not args.no_loop,
+        loop_episode=bool(args.loop),
     )
     stats = MuJoCoWipeEvaluator(config).run()
 

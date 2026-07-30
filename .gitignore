@@ -20,11 +20,14 @@ __pycache__/
 # Research outputs — keep small summaries visible in the IDE / @results;
 # ignore bulky binaries and raw traces.
 research/results/**/*.mp4
+research/results/**/*.gif
 research/results/**/*.png
 research/results/**/*.pdf
 research/results/**/*chrome_trace*
 research/results/**/inference_log.json
 research/results/**/vla_action_profiler_ops.json
+research/results/**/*.sqlite
+research/results/**/*_trace.json
 research/models/**
 !research/models/**/README.md
 !research/results/**/README.md
@@ -32,6 +35,9 @@ research/models/**
 !research/results/**/profiling_summary.txt
 !research/results/**/run_config.json
 !research/results/**/async_runtime.json
+!research/results/**/dual_thread_report.json
+!research/results/**/mujoco_eval_report.json
+!research/results/**/esn_hyperparam_sweep.csv
 
 # Step 5 / S2R runtime data (keep catalog + README)
 research/data/raw/*
@@ -51,8 +57,14 @@ research/**/*_runtime.xml
 
 # Large media (videos live under results/; ignore if copied elsewhere)
 research/**/*.mp4
+research/**/*.gif
 research/**/*.nsys-rep
 research/**/*.qdrep
+
+# Portable TeX toolchain (download locally; do not commit binaries / caches)
+tools/tectonic
+tools/tectonic.tar.gz
+tools/tectonic-cache/
 
 # OpenVLA upstream clone (install separately — see README)
 research/openvla/

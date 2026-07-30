@@ -373,15 +373,19 @@ def save_video_mp4(
     source_hz: float,
     target_fps: float = VIDEO_FPS,
 ) -> None:
-    """Compile RGB frames into an H.264-compatible MP4 at ``target_fps``."""
+    """Compile RGB frames into an H.264-compatible MP4 at ``target_fps``.
+
+    Falls back to OpenCV, then Pillow GIF if imageio/ffmpeg is unavailable.
+    """
     if not frames:
         logger.warning("No frames captured — skipping video export.")
         return
 
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     n_out = max(1, int(round(len(frames) * target_fps / source_hz)))
     indices = np.linspace(0, len(frames) - 1, n_out, dtype=int)
-    selected = [frames[i] for i in indices]
+    selected = [np.asarray(frames[i], dtype=np.uint8) for i in indices]
 
     h, w = selected[0].shape[:2]
     try:
@@ -397,33 +401,64 @@ def save_video_mp4(
         logger.info("Video saved via imageio: %s (%d frames @ %.0f fps)", path, len(selected), target_fps)
         return
     except Exception as exc:
-        logger.debug("imageio H.264 export unavailable: %s", exc)
+        logger.warning("imageio H.264 export unavailable: %s", exc)
 
-    import cv2
+    try:
+        import cv2
+    except ModuleNotFoundError:
+        cv2 = None  # type: ignore[assignment]
 
-    # H.264 / avc1 plays in Jupyter and browsers; mp4v often does not.
-    writer = None
-    for fourcc_str in ("avc1", "H264", "mp4v"):
-        fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
-        candidate = cv2.VideoWriter(str(path), fourcc, target_fps, (w, h))
-        if candidate.isOpened():
-            writer = candidate
-            codec_used = fourcc_str
-            break
-        candidate.release()
-    if writer is None:
-        raise RuntimeError(f"cv2.VideoWriter failed to open: {path}")
-    for frame in selected:
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        writer.write(bgr)
-    writer.release()
-    logger.info(
-        "Video saved via OpenCV (%s): %s (%d frames @ %.0f fps)",
-        codec_used,
-        path,
-        len(selected),
-        target_fps,
-    )
+    if cv2 is not None:
+        writer = None
+        codec_used = "mp4v"
+        for fourcc_str in ("avc1", "H264", "mp4v"):
+            fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+            candidate = cv2.VideoWriter(str(path), fourcc, target_fps, (w, h))
+            if candidate.isOpened():
+                writer = candidate
+                codec_used = fourcc_str
+                break
+            candidate.release()
+        if writer is not None:
+            for frame in selected:
+                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                writer.write(bgr)
+            writer.release()
+            logger.info(
+                "Video saved via OpenCV (%s): %s (%d frames @ %.0f fps)",
+                codec_used,
+                path,
+                len(selected),
+                target_fps,
+            )
+            return
+        logger.warning("cv2.VideoWriter failed to open: %s", path)
+
+    # Last resort: animated GIF (plays in Jupyter without OpenCV/ffmpeg).
+    try:
+        from PIL import Image
+
+        gif_path = path.with_suffix(".gif")
+        imgs = [Image.fromarray(frame) for frame in selected]
+        duration_ms = max(1, int(round(1000.0 / max(target_fps, 1e-6))))
+        imgs[0].save(
+            gif_path,
+            save_all=True,
+            append_images=imgs[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=False,
+        )
+        logger.warning(
+            "Saved GIF fallback (install opencv-python-headless imageio imageio-ffmpeg for MP4): %s",
+            gif_path,
+        )
+        return
+    except Exception as exc:
+        raise RuntimeError(
+            "Video export needs imageio[+ffmpeg], opencv-python-headless, or Pillow. "
+            "Install with: pip install opencv-python-headless imageio imageio-ffmpeg"
+        ) from exc
 
 
 # ── Process A: VLA perception worker ──────────────────────────
