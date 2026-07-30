@@ -1,27 +1,63 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "g1-openvla-research"
-version = "0.1.0"
-description = "OpenVLA profiling and ESN bridge research for Unitree G1"
+name = "g1-vla-esn-research"
+version = "0.2.0"
+description = "ICRA 2027: UnifoLM/VLA + ESN real-time G1 (29-DoF) control and S2R deploy"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "Osemudiamen Andrew Ihimekpen", email = "oihimekpen@pvamu.edu" }]
 dependencies = [
-    "numpy>=1.23,<3",
-    "scipy>=1.10",
-    "matplotlib>=3.8",
-    "pandas>=2.0",
-    "tqdm>=4.27",
+  "numpy>=1.26",
+  "scipy>=1.10",
+  "matplotlib>=3.8",
+  "pandas>=2.0",
+  "tqdm>=4.27",
+  "pyzmq>=25.1",
+  "msgpack>=1.0",
+  "pyyaml>=6.0",
+  "pydantic>=2.5",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "websockets>=12.0",
+  "rich>=13.7",
+  "typer>=0.12",
+  "orjson>=3.9",
 ]
 
-# GPU / OpenVLA profiling: pip install -r requirements-gpu.txt
-# (PyTorch CUDA wheels and pinned transformers/timm are not listed here.)
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3"]
+train = ["scikit-learn>=1.4", "torch>=2.2"]
+gpu = []  # see requirements-unifolm-gpu.txt / requirements-gpu.txt
+models = [
+  "torch>=2.2",
+  "transformers>=4.45",
+  "accelerate>=0.28",
+  "ultralytics>=8.1",
+  "opencv-python-headless>=4.8",
+  "pillow>=10.0",
+  "qwen-vl-utils>=0.0.8",
+]
+g1 = ["opencv-python-headless>=4.8"]
+notebooks = [
+  "jupyter>=1.0",
+  "jupyterlab>=4.0",
+  "ipywidgets>=8.1",
+]
 
 [project.scripts]
+s2r = "s2r.cli:app"
 step1-profile-openvla = "src.step1_profile_openvla:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["s2r*"]
+
+[tool.setuptools.package-data]
+"s2r.gui" = ["static/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]

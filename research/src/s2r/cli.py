@@ -16,10 +16,13 @@ console = Console()
 
 
 def _ensure_path() -> None:
-    # cli.py lives at src/s2r/cli.py → parents[1] == src/
-    src = str(Path(__file__).resolve().parents[1])
-    if src not in sys.path:
-        sys.path.insert(0, src)
+    # Prefer research/ + research/src on sys.path (Steps 1–4 + s2r).
+    here = Path(__file__).resolve()
+    research_root = here.parents[2]  # …/research
+    src = here.parents[1]  # …/research/src
+    for p in (str(research_root), str(src)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
 
 
 @app.command()
@@ -32,9 +35,12 @@ def deploy(
     from s2r.deploy.orchestrator import Orchestrator, launch_node
     import s2r.deploy.orchestrator as orch_mod
 
+    research_root = Path(__file__).resolve().parents[2]
     src = Path(__file__).resolve().parents[1]
     base_env = os.environ.copy()
-    base_env["PYTHONPATH"] = str(src) + os.pathsep + base_env.get("PYTHONPATH", "")
+    base_env["PYTHONPATH"] = (
+        str(research_root) + os.pathsep + str(src) + os.pathsep + base_env.get("PYTHONPATH", "")
+    )
 
     def _launch(name, config_path, env_inner=None):
         merged = dict(base_env)

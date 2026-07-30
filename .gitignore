@@ -21,17 +21,14 @@ __pycache__/
 research/results/
 research/models/
 
-# S2R pipeline local artifacts
-research/s2r/.venv/
-research/s2r/**/__pycache__/
-research/s2r/.pytest_cache/
-research/s2r/data/raw/*
-research/s2r/data/processed/*
-research/s2r/data/models/*
-research/s2r/data/esn/
-!research/s2r/data/**/.gitkeep
-!research/s2r/data/README.md
-!research/s2r/data/benchmark/
+# Step 5 / S2R runtime data (keep catalog + README)
+research/data/raw/*
+research/data/processed/*
+research/data/models/*
+research/data/esn/
+!research/data/**/.gitkeep
+!research/data/README.md
+!research/data/benchmark/
 
 # Large Cursor chat exports (source of recovered packages)
 cursor_chat_*.json

@@ -181,11 +181,13 @@ class Orchestrator:
 
 
 def deploy(config_path: str | None = None, only: list[str] | None = None) -> None:
-    # Ensure package root on path for subprocess -c imports
+    # Ensure research/ and research/src on path for subprocess -c imports
     root = Path(__file__).resolve().parents[3]
     src = root / "src"
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(src) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(root) + os.pathsep + str(src) + os.pathsep + env.get("PYTHONPATH", "")
+    )
     orch = Orchestrator(config_path)
     # monkeypatch launch to pass env
     global launch_node

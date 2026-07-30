@@ -5,8 +5,7 @@ Profile the open-source stack (YOLO, Qwen2.5 reasoner, Qwen2.5-VL, ESN) before d
 ## Quick start
 
 ```bash
-cd s2r
-source .venv/bin/activate
+cd research
 pip install -e ".[models]"   # for real GPU runs
 
 # Always-safe mock timing (no weights download)

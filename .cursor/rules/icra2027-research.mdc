@@ -10,11 +10,11 @@ Deadline: **15 Sep 2026**. Plan: `research/ACTION_PLAN.md`. Paper: `papers/icra2
 
 ## Do
 
-- Use `python3`; run from `research/` as `python3 -m src.<module>`.
-- Keep G1 at **29-DoF** / **100 Hz**; S2R lives in `research/s2r` (import `s2r`).
+- Use `python3`; run from `research/` as `python3 -m src.<module>` or `python3 -m s2r.cli …`.
+- Keep G1 at **29-DoF** / **100 Hz**; S2R is Step 5 at `research/src/s2r/` (import `s2r`).
 - Paper tables/figures only from **measured** `results/` JSON/CSV — never mock `SUCCESS_PRIORS`.
 - Put large datasets/checkpoints/videos under `/raid` (see `local-hardware.mdc`).
-- Prefer extending `step*.py` and `s2r/` over new parallel stacks.
+- Prefer extending `src/step*.py` and `src/s2r/` over new parallel trees.
 
 ## Don't
 

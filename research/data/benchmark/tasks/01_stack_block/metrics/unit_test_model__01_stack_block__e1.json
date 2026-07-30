@@ -1,0 +1,13 @@
+{
+  "task_id": "01_stack_block",
+  "model_name": "unit_test_model",
+  "episode_id": "e1",
+  "success": true,
+  "completion_time_s": 0.0,
+  "interventions": 0,
+  "e2e_latency_ms": 0.0,
+  "vla_hz": 0.0,
+  "esn_hz": 100,
+  "decision_latency_ms": 0.0,
+  "extras": {}
+}

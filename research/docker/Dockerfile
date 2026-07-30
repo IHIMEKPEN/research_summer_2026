@@ -10,6 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN pip install --no-cache-dir -e .
 
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app:/app/src
 EXPOSE 8080
 CMD ["python", "-m", "s2r.cli", "deploy"]
