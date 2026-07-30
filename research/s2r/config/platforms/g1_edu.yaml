@@ -1,0 +1,172 @@
+pipeline:
+  name: s2r-g1-edu
+  mode: g1
+  bind_host: 127.0.0.1
+zmq:
+  state_pub: tcp://127.0.0.1:5555
+  action_token_pub: tcp://127.0.0.1:5556
+  joint_cmd_pub: tcp://127.0.0.1:5557
+  decision_pub: tcp://127.0.0.1:5558
+  map_pub: tcp://127.0.0.1:5559
+  data_push: tcp://127.0.0.1:5560
+  gui_pub: tcp://127.0.0.1:5561
+  perception_pub: tcp://127.0.0.1:5562
+  mission_pub: tcp://127.0.0.1:5563
+  camera_pub: tcp://127.0.0.1:5564
+  sndhwm: 1000
+  rcvhwm: 1000
+  linger_ms: 0
+  conflate: true
+robot:
+  n_joints: 29
+  control_hz: 100
+  platform: unitree_g1_29dof
+  joint_limits:
+    min:
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    max:
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+mission:
+  task: wipe_table
+  instruction: Wipe the table with the cloth.
+  rate_hz: 5.0
+camera:
+  source: '0'
+  rate_hz: 15.0
+  width: 640
+  height: 480
+vision:
+  rate_hz: 5.0
+  use_vlm: true
+  vlm_every_n: 5
+models:
+  detector:
+    backend: yolo
+    model_id: yolov8n.pt
+    device: cuda
+    conf: 0.35
+    mock: false
+    target_labels:
+    - pen
+    - pencil
+    - bottle
+    - cup
+    - book
+    - person
+    - chair
+    - table
+    - laptop
+  vlm:
+    model_id: Qwen/Qwen2.5-VL-3B-Instruct
+    device: cuda
+    mock: false
+    api_base: http://127.0.0.1:9000/v1
+    api_key: EMPTY
+    max_new_tokens: 96
+  reasoner:
+    backend: qwen
+    model_id: Qwen/Qwen2.5-3B-Instruct
+    device: cuda
+    mock: false
+    api_base: http://127.0.0.1:8000/v1
+    api_key: EMPTY
+    max_new_tokens: 192
+    temperature: 0.1
+vla:
+  rate_hz: 2.0
+  action_dim: 29
+  mock: true
+esn:
+  reservoir_size: 1000
+  spectral_radius: 0.9
+  sparsity: 0.1
+  input_scale: 0.5
+  leaking_rate: 0.3
+  washout: 20
+  target_hz: 100
+  model_path: data/models/esn_g1_29dof.npz
+reasoning:
+  rate_hz: 4.0
+  policy: qwen
+g1:
+  mock: false
+  mode: high_level
+  iface: eth0
+  network: 192.168.123.164
+  control_hz: 50
+data_collection:
+  enabled: true
+  out_dir: data/raw
+  flush_every: 25
+gui:
+  host: 0.0.0.0
+  port: 8080
+  history: 400
+deploy:
+  nodes:
+  - gui
+  - camera
+  - vision
+  - mission
+  - state_publisher
+  - reasoning
+  - vla
+  - esn
+  - g1_bridge
+  - data_collector

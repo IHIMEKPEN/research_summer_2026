@@ -21,6 +21,21 @@ __pycache__/
 research/results/
 research/models/
 
+# S2R pipeline local artifacts
+research/s2r/.venv/
+research/s2r/**/__pycache__/
+research/s2r/.pytest_cache/
+research/s2r/data/raw/*
+research/s2r/data/processed/*
+research/s2r/data/models/*
+research/s2r/data/esn/
+!research/s2r/data/**/.gitkeep
+!research/s2r/data/README.md
+!research/s2r/data/benchmark/
+
+# Large Cursor chat exports (source of recovered packages)
+cursor_chat_*.json
+*.egg-info/
 # MuJoCo / sim logs and generated scene XML
 research/MUJOCO_LOG.TXT
 research/**/*_runtime.xml
@@ -42,6 +57,9 @@ papers/**/*.out
 papers/**/*.fdb_latexmk
 papers/**/*.fls
 papers/**/*.synctex.gz
+# Keep paper sources; ignore bulky reference PDFs and stale builds
+papers/reference_papers/**
+papers/icra2027/*.pdf
 
 # Misc caches
 others/__pycache__/

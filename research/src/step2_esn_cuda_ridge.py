@@ -38,6 +38,7 @@ import torch.nn as nn
 from datasets import load_dataset
 
 from src.paths import models_path, results_path
+from src.trajectory_metrics import compute_jerk_metric, compute_physical_jerk_rms
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -392,29 +393,18 @@ def predict_from_extended(
   return (w_out @ extended_states.T).T
 
 
-@torch.no_grad()
-def compute_jerk_metric(predictions: torch.Tensor) -> float:
-  """
-  Average squared step-to-step change in ESN output (smoothness proxy).
-
-  Low jerk ⇒ less high-frequency chatter on static / slowly moving joints.
-  """
-  if predictions.shape[0] < 2:
-    return 0.0
-  diffs = predictions[1:] - predictions[:-1]
-  return float(torch.mean(diffs ** 2).item())
-
-
 def evaluate_predictions(
   predictions: torch.Tensor,
   ground_truth: torch.Tensor,
+  control_hz: float = CONTROL_HZ,
 ) -> Dict[str, float]:
-  """Tracking MSE / RMSE and output jerk for a prediction trajectory."""
+  """Tracking MSE / RMSE, Δq proxy jerk, and physical jerk RMS (rad/s³)."""
   mse = float(torch.mean((predictions - ground_truth) ** 2).item())
   return {
     "mse": mse,
     "rmse": float(mse ** 0.5),
     "jerk": compute_jerk_metric(predictions),
+    "jerk_rms": compute_physical_jerk_rms(predictions, control_hz=control_hz),
   }
 
 

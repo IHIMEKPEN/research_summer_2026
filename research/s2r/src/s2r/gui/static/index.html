@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>S2R Pipeline Monitor</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #121a2b;
+      --line: #243047;
+      --text: #e7eefc;
+      --muted: #93a4c3;
+      --accent: #3dd6c6;
+      --warn: #ffb020;
+      --danger: #ff5d6c;
+      --ok: #5dffa6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a2a4a 0%, var(--bg) 50%);
+      color: var(--text);
+    }
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px 22px; border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px); position: sticky; top: 0; background: rgba(11,18,32,.85);
+    }
+    h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
+    .pill {
+      font-size: 12px; padding: 6px 10px; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--muted);
+    }
+    .pill.ok { color: var(--ok); border-color: rgba(93,255,166,.35); }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr;
+      gap: 14px; padding: 14px;
+    }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.02), transparent), var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px; padding: 14px; min-height: 220px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    .card h2 {
+      margin: 0 0 10px; font-size: 13px; text-transform: uppercase;
+      letter-spacing: .08em; color: var(--muted); font-weight: 600;
+    }
+    .wide { grid-column: span 2; }
+    canvas { width: 100%; height: 260px; background: #0a101c; border-radius: 10px; border: 1px solid var(--line); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; }
+    .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .kv .item {
+      background: rgba(255,255,255,.03); border: 1px solid var(--line);
+      border-radius: 10px; padding: 10px;
+    }
+    .kv .label { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .kv .value { font-size: 18px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .tag {
+      font-size: 11px; padding: 4px 8px; border-radius: 999px;
+      background: rgba(61,214,198,.12); color: var(--accent); border: 1px solid rgba(61,214,198,.3);
+    }
+    .bar {
+      height: 8px; border-radius: 99px; background: #1b263b; overflow: hidden; margin-top: 8px;
+    }
+    .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), #5d8cff); width: 0%; }
+    pre {
+      margin: 0; font-size: 12px; color: var(--muted); max-height: 220px; overflow: auto;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: 1fr; }
+      .wide { grid-column: span 1; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>S2R Ultra Pipeline Monitor</h1>
+      <div style="color:var(--muted);font-size:12px;margin-top:4px">
+        Real↔Sim · Qwen reasoner · YOLO/Qwen-VL perception · VLA→ESN · G1 Edu ready
+      </div>
+    </div>
+    <div class="pill" id="status">connecting…</div>
+  </header>
+
+  <div class="grid">
+    <div class="card wide">
+      <h2>Map / Localization</h2>
+      <canvas id="map"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>Mission</h2>
+      <div class="kv">
+        <div class="item"><div class="label">Task</div><div class="value" id="task" style="font-size:14px">—</div></div>
+        <div class="item"><div class="label">Phase</div><div class="value" id="phase">—</div></div>
+        <div class="item"><div class="label">Holding pen</div><div class="value" id="holding">—</div></div>
+        <div class="item"><div class="label">Last intent</div><div class="value" id="mintent" style="font-size:14px">—</div></div>
+      </div>
+      <pre id="timeline" style="margin-top:10px">—</pre>
+    </div>
+
+    <div class="card">
+      <h2>Perception (YOLO / Qwen-VL)</h2>
+      <div class="kv">
+        <div class="item"><div class="label">Objects</div><div class="value" id="objects" style="font-size:14px">—</div></div>
+        <div class="item"><div class="label">Det latency</div><div class="value" id="perclat">—</div></div>
+      </div>
+      <pre id="caption">—</pre>
+      <div class="tags" id="ptags"></div>
+    </div>
+
+    <div class="card">
+      <h2>Decision (Qwen)</h2>
+      <div class="kv">
+        <div class="item"><div class="label">Intent</div><div class="value" id="intent">—</div></div>
+        <div class="item"><div class="label">Allow motion</div><div class="value" id="allow">—</div></div>
+        <div class="item"><div class="label">Risk</div><div class="value" id="risk">—</div>
+          <div class="bar"><div id="riskbar"></div></div>
+        </div>
+        <div class="item"><div class="label">Reason</div><div class="value" id="reason" style="font-size:14px">—</div></div>
+      </div>
+      <div class="tags" id="tags"></div>
+    </div>
+
+    <div class="card">
+      <h2>Robot State</h2>
+      <div class="kv">
+        <div class="item"><div class="label">Mode</div><div class="value" id="mode">—</div></div>
+        <div class="item"><div class="label">EE pos</div><div class="value" id="ee" style="font-size:14px">—</div></div>
+      </div>
+      <canvas id="joints" style="height:160px;margin-top:10px"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>VLA Action Token (~2Hz)</h2>
+      <div class="kv">
+        <div class="item"><div class="label">Goal</div><div class="value" id="goal" style="font-size:14px">—</div></div>
+        <div class="item"><div class="label">Confidence</div><div class="value" id="conf">—</div></div>
+      </div>
+      <pre id="token">—</pre>
+    </div>
+
+    <div class="card">
+      <h2>ESN Joint Command (100Hz+)</h2>
+      <pre id="cmd">—</pre>
+    </div>
+
+    <div class="card wide">
+      <h2>Node Metrics</h2>
+      <table>
+        <thead>
+          <tr><th>Node</th><th>Hz</th><th>Latency ms</th><th>Queue</th><th>Extras</th></tr>
+        </thead>
+        <tbody id="metrics"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+const statusEl = document.getElementById('status');
+const mapCanvas = document.getElementById('map');
+const jointCanvas = document.getElementById('joints');
+const mapCtx = mapCanvas.getContext('2d');
+const jointCtx = jointCanvas.getContext('2d');
+
+function resizeCanvas(c) {
+  const rect = c.getBoundingClientRect();
+  c.width = Math.floor(rect.width * devicePixelRatio);
+  c.height = Math.floor(rect.height * devicePixelRatio);
+  const ctx = c.getContext('2d');
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+}
+function resizeAll() { resizeCanvas(mapCanvas); resizeCanvas(jointCanvas); }
+window.addEventListener('resize', resizeAll);
+resizeAll();
+
+function drawMap(map) {
+  const w = mapCanvas.clientWidth, h = mapCanvas.clientHeight;
+  mapCtx.clearRect(0, 0, w, h);
+  mapCtx.fillStyle = '#0a101c';
+  mapCtx.fillRect(0, 0, w, h);
+
+  // grid
+  mapCtx.strokeStyle = '#1b263b';
+  mapCtx.lineWidth = 1;
+  for (let i = 0; i <= 10; i++) {
+    const x = (i / 10) * w, y = (i / 10) * h;
+    mapCtx.beginPath(); mapCtx.moveTo(x, 0); mapCtx.lineTo(x, h); mapCtx.stroke();
+    mapCtx.beginPath(); mapCtx.moveTo(0, y); mapCtx.lineTo(w, y); mapCtx.stroke();
+  }
+
+  const toX = (x) => (x + 2.5) / 5 * w;
+  const toY = (y) => h - (y + 2.5) / 5 * h;
+
+  // occupancy
+  const grid = map.grid || [];
+  if (grid.length) {
+    const gh = grid.length, gw = grid[0].length;
+    for (let j = 0; j < gh; j++) {
+      for (let i = 0; i < gw; i++) {
+        if (grid[j][i] > 0.5) {
+          mapCtx.fillStyle = 'rgba(61,214,198,0.25)';
+          mapCtx.fillRect(i / gw * w, j / gh * h, w / gw + 1, h / gh + 1);
+        }
+      }
+    }
+  }
+
+  // landmarks
+  mapCtx.fillStyle = '#ffb020';
+  (map.landmarks || []).forEach(p => {
+    mapCtx.beginPath();
+    mapCtx.arc(toX(p[0]), toY(p[1]), 4, 0, Math.PI * 2);
+    mapCtx.fill();
+  });
+
+  // robot
+  const xy = map.robot_xy || [0, 0];
+  const yaw = map.robot_yaw || 0;
+  const rx = toX(xy[0]), ry = toY(xy[1]);
+  mapCtx.fillStyle = '#5d8cff';
+  mapCtx.beginPath(); mapCtx.arc(rx, ry, 8, 0, Math.PI * 2); mapCtx.fill();
+  mapCtx.strokeStyle = '#e7eefc';
+  mapCtx.beginPath();
+  mapCtx.moveTo(rx, ry);
+  mapCtx.lineTo(rx + Math.cos(yaw) * 22, ry - Math.sin(yaw) * 22);
+  mapCtx.stroke();
+}
+
+function drawJoints(q) {
+  const w = jointCanvas.clientWidth, h = jointCanvas.clientHeight;
+  jointCtx.clearRect(0, 0, w, h);
+  jointCtx.fillStyle = '#0a101c';
+  jointCtx.fillRect(0, 0, w, h);
+  if (!q || !q.length) return;
+  const n = q.length;
+  const gap = 8;
+  const bw = (w - gap * (n + 1)) / n;
+  q.forEach((v, i) => {
+    const norm = (v + Math.PI) / (2 * Math.PI);
+    const bh = Math.max(4, norm * (h - 20));
+    const x = gap + i * (bw + gap);
+    const y = h - bh - 8;
+    jointCtx.fillStyle = `hsl(${180 + i * 20}, 70%, 55%)`;
+    jointCtx.fillRect(x, y, bw, bh);
+  });
+}
+
+function fmt(v, d=2) {
+  if (typeof v !== 'number' || Number.isNaN(v)) return '—';
+  return v.toFixed(d);
+}
+
+function render(snap) {
+  statusEl.textContent = 'live · ' + new Date(snap.server_ts * 1000).toLocaleTimeString();
+  statusEl.classList.add('ok');
+
+  const mission = snap.latest.mission?.payload || {};
+  document.getElementById('task').textContent = mission.task || '—';
+  document.getElementById('phase').textContent = mission.phase || '—';
+  document.getElementById('holding').textContent = mission.holding_pen == null ? '—' : (mission.holding_pen ? 'YES' : 'NO');
+  document.getElementById('holding').style.color = mission.holding_pen ? 'var(--ok)' : 'var(--muted)';
+  document.getElementById('mintent').textContent = mission.last_intent || '—';
+  document.getElementById('timeline').textContent = JSON.stringify(mission.timeline || [], null, 2);
+
+  const perc = snap.latest.perception?.payload || {};
+  document.getElementById('objects').textContent = (perc.objects_of_interest || []).join(', ') || '—';
+  document.getElementById('perclat').textContent = fmt(perc.latency_ms, 1) + ' ms';
+  document.getElementById('caption').textContent = perc.caption || '—';
+  const ptags = document.getElementById('ptags');
+  ptags.innerHTML = '';
+  (perc.scene_tags || []).forEach(t => {
+    const el = document.createElement('span');
+    el.className = 'tag'; el.textContent = t; ptags.appendChild(el);
+  });
+
+  const decision = snap.latest.decision?.payload || {};
+  document.getElementById('intent').textContent = decision.intent ?? '—';
+  document.getElementById('allow').textContent = decision.allow_motion == null ? '—' : (decision.allow_motion ? 'YES' : 'NO');
+  document.getElementById('allow').style.color = decision.allow_motion ? 'var(--ok)' : 'var(--danger)';
+  document.getElementById('risk').textContent = fmt(decision.risk, 2);
+  document.getElementById('riskbar').style.width = `${Math.round((decision.risk || 0) * 100)}%`;
+  document.getElementById('reason').textContent = decision.reason || '—';
+  const tags = document.getElementById('tags');
+  tags.innerHTML = '';
+  (decision.tags || []).forEach(t => {
+    const el = document.createElement('span');
+    el.className = 'tag'; el.textContent = t; tags.appendChild(el);
+  });
+
+  const state = snap.latest.state?.payload || {};
+  document.getElementById('mode').textContent = state.mode || '—';
+  document.getElementById('ee').textContent = (state.ee_pos || []).map(x => fmt(x, 2)).join(', ') || '—';
+  drawJoints(state.joint_pos || []);
+
+  const token = snap.latest.action_token?.payload || {};
+  document.getElementById('goal').textContent = token.goal || '—';
+  document.getElementById('conf').textContent = fmt(token.confidence, 2);
+  document.getElementById('token').textContent = JSON.stringify(token, null, 2);
+
+  const cmd = snap.latest.joint_cmd?.payload || {};
+  document.getElementById('cmd').textContent = JSON.stringify(cmd, null, 2);
+
+  const map = snap.latest.map?.payload;
+  if (map) drawMap(map);
+
+  const tbody = document.getElementById('metrics');
+  tbody.innerHTML = '';
+  Object.entries(snap.metrics || {}).forEach(([node, m]) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${node}</td><td>${fmt(m.hz,1)}</td><td>${fmt(m.latency_ms,2)}</td><td>${m.queue_depth ?? 0}</td><td><code>${JSON.stringify(m.extras || {})}</code></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/snapshot');
+    const snap = await res.json();
+    render(snap);
+  } catch (e) {
+    statusEl.textContent = 'disconnected';
+    statusEl.classList.remove('ok');
+  }
+}
+setInterval(poll, 100);
+poll();
+</script>
+</body>
+</html>

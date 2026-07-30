@@ -1,131 +1,95 @@
-# CLAUDE.md — Rules for AI Tools Working in This Repository
+# CLAUDE.md — Rules for AI Tools in This Repository
 
 ## Project Identity
 
 - **Author:** Osemudiamen Andrew Ihimekpen
 - **Institution:** PVAMU CREDIT Center
-- **Project:** VLA + ESN for Real-Time Humanoid Robot Control
-- **Target:** ICRA 2027 submission (~September 2026)
-- **Working directory:** `/Users/andrew/Desktop/competitions/research_summer_2026/research/`
+- **Project:** VLA + ESN for Real-Time Humanoid Control (Unitree G1, 29-DoF)
+- **Venue:** ICRA 2027 — hard deadline **15 Sep 2026 23:59 PST**
+- **Repo root:** `/home/aihimekpen/research_summer_2026`
+- **Code root:** `research/`
+- **Paper:** `papers/icra2027/`
+- **Plan:** `research/ACTION_PLAN.md`
 
 ---
 
 ## Execution Rules
 
-### Always use `python3`, never `python`
-This machine uses `python3`. All test and run commands must use `python3`.
-
-### Always test with `--mock` first
-Before running any script on real hardware or with the real model:
-```bash
-python3 <script>.py --mock
-```
-Never invoke a script that downloads the OpenVLA model (13 GB) without explicit user instruction.
-
-### Never modify mock simulation priors without user confirmation
-The success-rate priors in `G1TaskEnv.SUCCESS_PRIORS` and `G1FullEvalEnv` encode the research hypothesis. Changing them changes the paper's claimed results. Only modify these when the user explicitly provides measured data from the real simulator.
-
-### Never delete or overwrite result files
-All files under `results/` are research outputs. If a script would overwrite them, flag it to the user first.
-
-### Never commit generated outputs
-The `results/`, `models/`, and `__pycache__/` directories contain generated data, not source code.
+1. Always use **`python3`**, never `python`.
+2. Prefer **`--mock` first** before downloading UnifoLM / OpenVLA weights.
+3. Never treat `SUCCESS_PRIORS` / mock Bernoulli tables as paper results. Paper numbers must come from measured JSON/CSV under `results/`.
+4. Never delete or silently overwrite `results/` or `models/` without confirming with the user.
+5. Do not commit large generated artifacts (`results/`, `models/`, `*.mp4`, chat JSON exports).
+6. Large data/checkpoints/logs → **`/raid`** (root disk is often near full). See `.cursor/rules/local-hardware.mdc`.
 
 ---
 
-## Code Conventions
+## Code Layout (do not rename casually)
 
-### Naming
-- Script files: `step{N}_{description}.py` — never rename existing step files
-- Result directories: `results/step{N}_{description}/`
-- Model checkpoints: `models/{name}/`
+| Path | Role |
+|------|------|
+| `research/src/step*.py` | ICRA Steps 1–4 (profile, ESN, dual-process, MuJoCo wipe) |
+| `research/src/g1_constants.py` | `G1_DOF=29`, rates |
+| `research/src/step3_control_baselines.py` | ZOH / linear / PID baselines |
+| `research/s2r/` | Sim-to-real ZMQ deploy (package `s2r`, 29-DoF defaults) |
+| `research/notebooks/` | Lab GPU notebooks |
+| `research/results/` | Measured outputs (gitignored) |
+| `research/models/` | Checkpoints (gitignored) |
+| `unifolm-vla/` | Upstream submodule |
 
-### Script structure
-Every script follows this pattern:
-1. Module docstring with purpose, deliverable week, author, usage
-2. Constants block (ALL_CAPS)
-3. Data structures (`@dataclass`)
-4. Core logic classes/functions
-5. `main()` with `argparse`
-6. `if __name__ == "__main__": main()`
-
-### Mock vs real separation
-- Mock classes are prefixed with `Mock` or use a `--mock` flag
-- Mock inference delays use `time.sleep()` to simulate realistic latency
-- Real model calls are always inside `try/except` with graceful fallback to mock
-
-### No silent failures
-If a real model load fails, always log a `WARNING` stating that mock inference is being used. Never silently proceed without the user knowing.
-
-### Figures
-- All figures saved as both `.pdf` (for LaTeX) and `.png` (for previewing)
-- Use `plt.close()` after saving — never leave figures open
-- DPI: 150 for screen, 300 for `savefig`
-- Color scheme: red=pure_openvla, orange=vla_pid, blue=vla_lstm, green=vla_esn (proposed)
-
-### LaTeX tables
-- Never use `df.to_latex()` — it requires jinja2 which is not installed
-- Always write LaTeX tables manually with `\toprule`, `\midrule`, `\bottomrule`
-- Proposed method rows use `\textbf{}` formatting
+Script naming: `step{N}_{description}.py`. Results: `results/step{N}_{description}/`.
 
 ---
 
-## Architecture Decisions (do not change without user approval)
+## Architecture Decisions (user approval required to change)
 
 | Decision | Rationale |
 |----------|-----------|
-| Reservoir is fixed (not trained) | Echo state property; only W_out is learned |
-| W_out fit via ridge regression | Closed-form, no backprop, seconds not hours |
-| Input dim = OPENVLA_HIDDEN_DIM (4096) | Full hidden state; user may add projection layer later |
-| Spectral radius ρ < 1 | Required for echo state property (stability guarantee) |
-| Zero-order hold for upsampling | Default; linear interpolation available via flag |
-| `scipy.stats.wilcoxon` for significance | Non-parametric, appropriate for bounded success rates |
-| G1_DOF = 29 | Unitree G1 has 29 controllable joints |
-| TARGET_HZ = 100 | G1 low-level controller runs at 100 Hz |
+| Reservoir fixed; only `W_out` trained | Echo-state property; ridge closed-form |
+| Production ESN input `u(t)∈R^{58}` = `[q; q*_VLA]` | Matches CUDA path / wipe data — **not** 4096-D hidden states |
+| Legacy `step2_esn_bridge.py` (4096-D) | Mock/legacy only; do not use for paper tables |
+| Spectral radius `ρ < 1` | Echo-state stability |
+| `G1_DOF = 29`, `CONTROL_HZ = 100`, `VLA_HZ ≈ 2` | Unitree G1 + measured UnifoLM rate |
+| S2R package = `research/s2r` | Deploy / DIRT ablations; defaults match 29-DoF |
+| Paper claims = measured only | No mock priors in `main.tex` tables |
+
+Color scheme for figures: red=ZOH/pure VLA, orange=linear/PID, green=VLA+ESN (proposed).
 
 ---
 
-## Step Timeline (do not change deliverable dates)
+## ICRA Critical Path (freeze features)
 
-| Step | Weeks | Dates | Deliverable |
-|------|-------|-------|-------------|
-| 1a | 1–2 | May 19 – Jun 1 | Inference log + profiling report |
-| 1b | 3–4 | Jun 2 – Jun 15 | 4-method baseline table |
-| 2a | 5–6 | Jun 16 – Jun 29 | ESN architecture + unit tests |
-| 2b | 7–8 | Jun 30 – Jul 13 | Trained model + training report |
-| 3a | 9–10 | Jul 14 – Jul 27 | Full evaluation table |
-| 3b | 11–12 | Jul 28 – Aug 10 | Ablation studies |
-| 4a | 13–14 | Aug 11 – Aug 24 | All paper figures |
-| 4b | 15–16 | Aug 25 – Sep 7 | LaTeX tables + submission package |
+| Phase | Dates | Focus |
+|-------|-------|--------|
+| 1 | Aug 1–14 | Live UnifoLM Step 3; ZOH/linear baselines; metrics |
+| 2 | Aug 15–31 | CUDA ESN ablations; fill `results/`; Advisor Update 2 was Aug 12 |
+| 3 | Sep 1–12 | Manuscript in `papers/icra2027/` (6+1 pages) |
+| 4 | Sep 13–15 | PaperPlaza upload buffer |
 
-**Advisor Update 1:** June 3, 2026  
-**Advisor Update 2:** August 12, 2026
+---
+
+## Outputs Map
+
+```
+research/results/
+  step1_profiling_unifolm_vla0/   # measured UnifoLM latency
+  step1_baselines/                # ZOH / linear / PID JSON
+  step2_training/                 # ESN sweep
+  step3_dual_thread/              # dual-process latency
+  step3_evaluation/               # closed-loop (fill)
+  step3_ablation/                 # N × ρ (fill)
+  step4_mujoco_evaluation/        # wipe oracle
+  step4_paper_figures/            # PDF/PNG from measured data only
+  step4_paper_tables/
+
+research/models/esn_cuda_ridge/   # best ridge checkpoint
+```
 
 ---
 
 ## Dependencies
 
-Installed in the `openvla_g1` conda environment (see `step1_setup_env.sh`).
-Scripts also run in the system Python 3.11 environment with:
-```
-numpy, scipy, matplotlib, pandas, tqdm, torch (optional), transformers (optional)
-```
-`jinja2` is NOT installed — do not use any pandas `.to_latex()` or `.style` calls.
-
----
-
-## Outputs Directory Map
-
-```
-results/
-  step1_profiling/       ← inference_log.json, profiling_report.json, *.pdf
-  step1_baselines/       ← baseline_table.csv, baseline_table.tex, *.pdf
-  step2_training/        ← training_report.json, hyperparam_sweep.csv, *.pdf
-  step3_evaluation/      ← full_evaluation_table.csv, all_episodes.csv, *.pdf
-  step3_ablation/        ← ablation_*.csv, ablation_studies.pdf
-  step4_paper_figures/   ← fig1_*.pdf … fig8_*.pdf (all paper figures)
-  step4_paper_tables/    ← all_tables.tex, paper_results_summary.json
-
-models/
-  esn_bridge/            ← W_out.npy, config.json
-```
+- Core: `numpy`, `scipy`, `matplotlib`, `pandas`, `tqdm`, `torch`
+- UnifoLM GPU: `research/requirements-unifolm-gpu.txt`
+- S2R: `cd research/s2r && pip install -e ".[dev,train]"`
+- No `df.to_latex()` (jinja2 may be missing) — write LaTeX tables manually

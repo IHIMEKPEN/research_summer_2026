@@ -31,8 +31,11 @@ from typing import List, Literal, Optional, Tuple
 import numpy as np
 import torch
 
-from src.mujoco_wipe_scene import WipeClothController, make_wipe_scene_env_model
-from src.wipe_task_metrics import WipeTaskMetrics, WipeTaskMetricsRecorder
+from src.mujoco_wipe_scene import (
+    RIGHT_HAND_BODY,
+    WipeClothController,
+    make_wipe_scene_env_model,
+)from src.wipe_task_metrics import WipeTaskMetrics, WipeTaskMetricsRecorder
 from src.paths import models_path, results_path
 from src.step2_esn_cuda_ridge import (
     CONTROL_HZ,
@@ -258,13 +261,16 @@ class MuJoCoWipeEvaluator:
             tracking_sq_err.append(err_sq)
 
             if env.cloth is not None:
-                hand_target, _ = env.cloth._hand_target_pose()
+                hand_attach_pose, _ = env.cloth._hand_target_pose()
+                right_id = env.model.body(RIGHT_HAND_BODY).id
+                right_hand_pos = np.asarray(env.data.xpos[right_id], dtype=np.float64)
                 metrics_rec.record_step(
                     joint_err_sq_mean=err_sq,
                     cloth_pos=env.cloth.cloth_position(),
-                    right_hand_pos=hand_target,
+                    right_hand_pos=right_hand_pos,
                     right_gripper=right_gripper[t],
                     cloth_ctrl=env.cloth,
+                    right_ee_target=hand_attach_pose,
                 )
 
             if cfg.record_video:

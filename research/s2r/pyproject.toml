@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "s2r"
+version = "0.1.0"
+description = "Sim-to-real G1 29-DoF robotics pipeline with ZMQ, ESN upsampling, and monitoring GUI"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "S2R Team" }]
+dependencies = [
+  "numpy>=1.26",
+  "pyzmq>=25.1",
+  "msgpack>=1.0",
+  "pyyaml>=6.0",
+  "pydantic>=2.5",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "websockets>=12.0",
+  "rich>=13.7",
+  "typer>=0.12",
+  "orjson>=3.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3"]
+train = ["scikit-learn>=1.4"]
+models = [
+  "torch>=2.2",
+  "transformers>=4.45",
+  "accelerate>=0.28",
+  "ultralytics>=8.1",
+  "opencv-python-headless>=4.8",
+  "pillow>=10.0",
+  "qwen-vl-utils>=0.0.8",
+]
+g1 = [
+  # Install unitree_sdk2_python from upstream git on the robot:
+  # pip install -e /path/to/unitree_sdk2_python
+  "opencv-python-headless>=4.8",
+]
+notebooks = [
+  "jupyter>=1.0",
+  "jupyterlab>=4.0",
+  "matplotlib>=3.8",
+  "pandas>=2.1",
+  "ipywidgets>=8.1",
+]
+
+[project.scripts]
+s2r = "s2r.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"s2r.gui" = ["static/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,133 @@
+% ICRA 2027 contributed paper (IEEE RAS).
+% Target length: 6 pages + 1 optional page for references.
+% Submit via PaperPlaza (ras.papercept.net) by 15 Sep 2026 23:59 PST.
+
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{url}
+
+\begin{document}
+
+\title{Closing the Frequency Gap: Real-Time Humanoid Control\\
+via Vision-Language-Action Models and Echo State Networks}
+
+\author{\IEEEauthorblockN{Osemudiamen Andrew Ihimekpen}
+\IEEEauthorblockA{\textit{Dept.\ of Electrical and Computer Engineering}\\
+\textit{CREDIT Center, Prairie View A\&M University}\\
+Prairie View, TX, USA\\
+oihimekpen@pvamu.edu}
+\and
+\IEEEauthorblockN{Lijun Qian}
+\IEEEauthorblockA{\textit{Dept.\ of Electrical and Computer Engineering}\\
+\textit{CREDIT Center, Prairie View A\&M University}\\
+Prairie View, TX, USA\\
+liqian@pvamu.edu}}
+
+\maketitle
+
+\begin{abstract}
+Vision-Language-Action (VLA) models provide open-vocabulary manipulation policies, but their inference rates ($\sim$2\,Hz on Unitree UnifoLM-VLA) are incompatible with the 100\,Hz joint control loops required by humanoid robots such as the Unitree G1 (29\,DoF).
+We propose a hybrid controller in which a fixed Echo State Network (ESN) reservoir bridges sparse VLA joint targets to smooth 100\,Hz commands.
+The reservoir is untrained; only a linear readout is fit by ridge regression on demonstration trajectories.
+On a DGX Station (4$\times$V100), UnifoLM-VLA measures \textbf{508\,ms} mean latency (\textbf{$\approx$1.97\,Hz}), a $\sim$51$\times$ gap to the low-level controller.
+We evaluate VLA$+$ESN against zero-order hold and linear-interpolation baselines on a MuJoCo G1 wipe-table task, and release an S2R deploy stack for sim-to-real transfer under a DIRT-style discrepancy parameterization.
+This manuscript reports measured profiling and tracking metrics and the planned closed-loop protocol for ICRA 2027.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Vision-language-action models, humanoid robots, echo state networks, reservoir computing, sim-to-real, Unitree G1
+\end{IEEEkeywords}
+
+\section{Introduction}
+Foundation VLAs such as OpenVLA~\cite{OpenVLA2025}, $\pi_0$~\cite{Preprints2026}, and Unitree UnifoLM-VLA~\cite{UnifoLM2026} map language and vision to robot actions.
+Humanoid whole-body control, however, demands millisecond-scale updates~\cite{PhysicalAI2026}.
+Autoregressive or diffusion action heads introduce latency that, under naive hold, yields jerky motion and task failure---the \emph{frequency gap}.
+
+We treat the G1 as a unified dynamical system and insert a leaky ESN between VLA intents ($\sim$2\,Hz) and joint commands (100\,Hz).
+The VLA supplies sparse targets; the reservoir supplies reflexive temporal filtering without backpropagation through time.
+
+\textbf{Contributions.}
+(i)~Measured UnifoLM latency on G1 wipe profiling;
+(ii)~CUDA ESN with input $u(t)=[q_t;\,q^{\star}_{\mathrm{VLA}}]\in\mathbb{R}^{58}$ and ridge readout;
+(iii)~MuJoCo wipe evaluation and ZOH/linear baselines;
+(iv)~S2R ZMQ deploy package (29-DoF defaults) for DIRT-guided transfer.
+
+\section{Related Work}
+VLA surveys highlight bimanual and whole-body settings as hard cases~\cite{VLA_Review2026}.
+Flow matching accelerates action generation~\cite{Preprints2026}; recurrent bridges such as xLSTM help long-horizon memory~\cite{Notes2Self2026}.
+Diffusion action chunking trades compute for smoothness; Central Pattern Generators (CPGs) provide rhythmic priors but lack language grounding.
+Reservoir computing offers fast, training-light dynamics~\cite{Jaeger2001,Caoetal2023}.
+We combine a frozen reservoir with a language-conditioned VLA rather than replacing either.
+
+\section{Methodology}
+\subsection{System Architecture}
+\begin{itemize}
+  \item \textbf{Perception / VLA:} UnifoLM-VLA-Base predicts end-effector actions for \texttt{g1\_wipe\_table}; we map EE poses to 29-D joint targets via Jacobian IK.
+  \item \textbf{ESN bridge:} Leaky update
+  \[
+  x(t)=(1-\alpha)x(t-1)+\alpha\,\tanh\!\big(W_{\mathrm{res}}x(t-1)+W_{\mathrm{in}}u(t)\big),
+  \]
+  with sparse $W_{\mathrm{res}}$ scaled to spectral radius $\rho<1$, and readout
+  $y(t)=W_{\mathrm{out}}[x(t);u(t)]$ fit by ridge regression.
+  \item \textbf{S2R / DIRT layer:} Parameterizes sim--real discrepancy for controller and domain ablations (ESN vs.\ passthrough ZOH/raw) in the deploy stack.
+\end{itemize}
+
+\subsection{Baselines}
+\begin{enumerate}
+  \item \textbf{Pure VLA ZOH:} hold each 2\,Hz target for 50 control ticks.
+  \item \textbf{VLA $+$ linear interpolation:} interpolate between sparse knots at 100\,Hz.
+  \item \textbf{VLA $+$ ESN (ours):} CUDA reservoir + ridge readout.
+\end{enumerate}
+
+\section{Experimental Protocol}
+\subsection{Setup}
+\textbf{Robot:} Unitree G1, 29 actuated joints.
+\textbf{Task:} Wipe-table (dataset \texttt{G1\_Dex1\_Wipe\_Table}~\cite{UnifoLM2026}).
+\textbf{Hardware:} NVIDIA DGX Station, 4$\times$Tesla V100-32GB, CUDA 13.
+\textbf{Control:} 100\,Hz MuJoCo kinematic/PD replay and dual-process VLA$\leftrightarrow$ESN integration.
+
+\subsection{Metrics}
+Task success (grasp / wipe contact), joint RMSE, right EE RMSE, trajectory jerk (finite-difference $d^3q/dt^3$), control Hz / step latency, and FLOPs/runtime of the readout vs.\ VLA.
+
+\subsection{Measured Status (as of July 2026)}
+\begin{table}[!t]
+\centering
+\caption{Measured profiling and offline tracking (episode 0). Closed-loop success rates TBD.}
+\label{tab:measured}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Quantity & Value & Notes \\
+\midrule
+UnifoLM mean latency & 508\,ms & $\approx$1.97\,Hz \\
+Frequency gap to 100\,Hz & $\sim$51$\times$ & DGX V100 \\
+ESN offline RMSE & $\sim$9.8$\times10^{-4}$\,rad & best ridge sweep \\
+Dual-process ESN rate (mock VLA) & $\sim$167\,Hz & GIL-free MP \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Planned Closed-Loop Study}
+50+ trials per method on wipe-table with live UnifoLM (no mock), reporting success, jerk, and latency.
+Ablations: reservoir size $N\in\{500,1000,2000\}$, $\rho\in\{0.85,0.95,1.05\}$.
+
+\section{Discussion and Limitations}
+Results in Table~\ref{tab:measured} establish the latency gap and offline tracking fidelity.
+Paper-facing success rates require completing live UnifoLM closed-loop runs; we do not treat mock Bernoulli priors as measured evidence.
+Orientation IK currently tracks EE position only; full rot6d tracking is future work.
+
+\section{Conclusion}
+We presented a VLA$+$ESN architecture that closes the $\sim$50$\times$ frequency gap between UnifoLM inference and G1 100\,Hz control, with measured profiling, CUDA ridge training, MuJoCo wipe tooling, and an S2R deploy path for DIRT-guided transfer toward ICRA 2027.
+
+\section*{Acknowledgment}
+Supported in part by ARO Cooperative Agreement W911NF-24-2-0133.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

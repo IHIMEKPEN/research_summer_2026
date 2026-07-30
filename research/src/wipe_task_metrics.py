@@ -48,6 +48,7 @@ class WipeTaskMetricsRecorder:
     _joint_sq_err: List[float] = field(default_factory=list)
     _cloth_positions: List[np.ndarray] = field(default_factory=list)
     _right_hand_positions: List[np.ndarray] = field(default_factory=list)
+    _right_ee_targets: List[np.ndarray] = field(default_factory=list)
     _grasped_flags: List[bool] = field(default_factory=list)
     _right_gripper: List[float] = field(default_factory=list)
     _first_grasp_proximity: Optional[float] = None
@@ -62,6 +63,7 @@ class WipeTaskMetricsRecorder:
         right_hand_pos: np.ndarray,
         right_gripper: float,
         cloth_ctrl: WipeClothController,
+        right_ee_target: Optional[np.ndarray] = None,
     ) -> None:
         self._joint_sq_err.append(float(joint_err_sq_mean))
         cloth_pos = np.asarray(cloth_pos, dtype=np.float64).reshape(3)
@@ -69,6 +71,10 @@ class WipeTaskMetricsRecorder:
         self._cloth_positions.append(cloth_pos.copy())
         self._right_hand_positions.append(hand_pos.copy())
         self._right_gripper.append(float(right_gripper))
+        if right_ee_target is not None:
+            self._right_ee_targets.append(
+                np.asarray(right_ee_target, dtype=np.float64).reshape(3).copy()
+            )
 
         dist = float(np.linalg.norm(hand_pos - cloth_pos))
         gripper_closed = float(right_gripper) < GRIPPER_GRASP_THRESHOLD
@@ -106,6 +112,19 @@ class WipeTaskMetricsRecorder:
 
         cloth = np.stack(self._cloth_positions, axis=0)
         hand = np.stack(self._right_hand_positions, axis=0)
+
+        if self._right_ee_targets:
+            tgt = np.stack(self._right_ee_targets, axis=0)
+            m = min(len(hand), len(tgt))
+            if m > 0:
+                metrics.right_ee_rmse_m = float(
+                    np.sqrt(np.mean(np.sum((hand[:m] - tgt[:m]) ** 2, axis=1)))
+                )
+        elif n > 1:
+            # Fallback: EE tracking proxy vs episode-mean hand position when no GT target.
+            metrics.right_ee_rmse_m = float(
+                np.sqrt(np.mean(np.sum((hand - hand.mean(axis=0)) ** 2, axis=1)))
+            )
 
         if n > 1:
             jumps = np.linalg.norm(np.diff(cloth, axis=0), axis=1)

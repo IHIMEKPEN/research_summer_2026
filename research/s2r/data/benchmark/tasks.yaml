@@ -1,0 +1,104 @@
+# 12-task Unitree G1 manipulation benchmark catalog
+# Aligned with UnifoLM-VLA / Unitree open datasets on Hugging Face.
+# https://github.com/unitreerobotics/unifolm-vla
+
+version: 1
+robot: unitree_g1
+policy_family: unifolm_vla
+notes: >
+  Use these task IDs for benchmarking your model vs Unitree VLA and for
+  collecting paired (action_token, joint_cmd) data to train the ESN upsampler.
+
+tasks:
+  - id: 01_stack_block
+    name: Stack Block
+    hf_dataset: unitreerobotics/G1_Stack_Block
+    instruction: "Stack the blocks in the correct order."
+    category: manipulation
+    success_metric: stack_complete
+
+  - id: 02_bag_insert
+    name: Bag Insert
+    hf_dataset: unitreerobotics/G1_Bag_Insert
+    instruction: "Insert the object into the bag."
+    category: manipulation
+    success_metric: object_in_bag
+
+  - id: 03_erase_board
+    name: Erase Board
+    hf_dataset: unitreerobotics/G1_Erase_Board
+    instruction: "Erase the marks on the board."
+    category: tool_use
+    success_metric: board_clear
+
+  - id: 04_clean_table
+    name: Clean Table
+    hf_dataset: unitreerobotics/G1_Clean_Table
+    instruction: "Clean the table by removing clutter."
+    category: household
+    success_metric: table_clear
+
+  - id: 05_pack_pencilbox
+    name: Pack Pencil Box
+    hf_dataset: unitreerobotics/G1_Pack_PencilBox
+    instruction: "Pack the pens/pencils into the pencil box."
+    category: organization
+    success_metric: items_packed
+
+  - id: 06_pour_medicine
+    name: Pour Medicine
+    hf_dataset: unitreerobotics/G1_Pour_Medicine
+    instruction: "Pour the medicine carefully into the container."
+    category: precision
+    success_metric: pour_complete
+
+  - id: 07_pack_pingpong
+    name: Pack Ping Pong
+    hf_dataset: unitreerobotics/G1_Pack_PingPong
+    instruction: "Pack the ping pong balls into the box."
+    category: organization
+    success_metric: balls_packed
+
+  - id: 08_prepare_fruit
+    name: Prepare Fruit
+    hf_dataset: unitreerobotics/G1_Prepare_Fruit
+    instruction: "Prepare and sort the fruit as instructed."
+    category: household
+    success_metric: fruit_sorted
+
+  - id: 09_organize_tools
+    name: Organize Tools
+    hf_dataset: unitreerobotics/G1_Organize_Tools
+    instruction: "Organize the tools into their places."
+    category: organization
+    success_metric: tools_organized
+
+  - id: 10_fold_towel
+    name: Fold Towel
+    hf_dataset: unitreerobotics/G1_Fold_Towel
+    instruction: "Fold the towel neatly."
+    category: deformable
+    success_metric: towel_folded
+
+  - id: 11_wipe_table
+    name: Wipe Table
+    hf_dataset: unitreerobotics/G1_Wipe_Table
+    instruction: "Wipe the table surface clean."
+    category: household
+    success_metric: surface_wiped
+
+  - id: 12_dualrobot_clean_table
+    name: Dual-Robot Clean Table
+    hf_dataset: unitreerobotics/G1_DualRobot_Clean_Table
+    instruction: "Collaborate to clean the table."
+    category: multi_agent
+    success_metric: table_clear_multi
+
+metrics:
+  - success_rate
+  - completion_time_s
+  - interventions
+  - e2e_latency_ms
+  - vla_hz
+  - esn_hz
+  - decision_latency_ms

@@ -1,0 +1,28 @@
+---
+description: ICRA 2027 VLA+ESN research workflow and repo conventions
+alwaysApply: true
+---
+
+# ICRA 2027 Research Rules
+
+Repo: `/home/aihimekpen/research_summer_2026`  
+Deadline: **15 Sep 2026**. Plan: `research/ACTION_PLAN.md`. Paper: `papers/icra2027/`.
+
+## Do
+
+- Use `python3`; run from `research/` as `python3 -m src.<module>`.
+- Keep G1 at **29-DoF** / **100 Hz**; S2R lives in `research/s2r` (import `s2r`).
+- Paper tables/figures only from **measured** `results/` JSON/CSV — never mock `SUCCESS_PRIORS`.
+- Put large datasets/checkpoints/videos under `/raid` (see `local-hardware.mdc`).
+- Prefer extending `step*.py` and `s2r/` over new parallel stacks.
+
+## Don't
+
+- Don't revive 4096-D `step2_esn_bridge` for paper experiments (legacy/mock).
+- Don't commit `research/results/`, `research/models/`, `cursor_chat_*.json`, or `*.mp4`.
+- Don't download UnifoLM/OpenVLA weights without explicit user ask; use `--mock` first.
+- Don't claim closed-loop success rates until live UnifoLM Step 3 logs exist.
+
+## Current stack
+
+`UnifoLM (~2 Hz) → ESN (u∈R^58) → G1 29-DoF @ 100 Hz` + MuJoCo wipe + S2R deploy.

@@ -1,0 +1,146 @@
+pipeline:
+  name: s2r-ablation-no-esn-zoh
+  mode: sim
+  control_engine: passthrough
+  bind_host: 127.0.0.1
+zmq:
+  state_pub: tcp://127.0.0.1:5655
+  action_token_pub: tcp://127.0.0.1:5656
+  joint_cmd_pub: tcp://127.0.0.1:5657
+  decision_pub: tcp://127.0.0.1:5658
+  map_pub: tcp://127.0.0.1:5659
+  data_push: tcp://127.0.0.1:5660
+  gui_pub: tcp://127.0.0.1:5661
+  perception_pub: tcp://127.0.0.1:5662
+  mission_pub: tcp://127.0.0.1:5663
+  camera_pub: tcp://127.0.0.1:5664
+  sndhwm: 1000
+  rcvhwm: 1000
+  linger_ms: 0
+  conflate: true
+robot:
+  n_joints: 29
+  control_hz: 100
+  platform: unitree_g1_29dof
+  joint_limits:
+    min:
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    - -3.1416
+    max:
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+    - 3.1416
+mission:
+  task: bring_pen
+  instruction: Go bring me a pen from the table somewhere in the lab
+  rate_hz: 5.0
+camera:
+  source: mock
+  rate_hz: 15.0
+  width: 640
+  height: 480
+vision:
+  rate_hz: 5.0
+  use_vlm: true
+  vlm_every_n: 5
+models:
+  detector:
+    backend: yolo
+    model_id: yolov8n.pt
+    device: cuda
+    mock: true
+  vlm:
+    model_id: Qwen/Qwen2.5-VL-3B-Instruct
+    device: cuda
+    mock: true
+  reasoner:
+    backend: qwen
+    model_id: Qwen/Qwen2.5-3B-Instruct
+    device: cuda
+    mock: true
+vla:
+  rate_hz: 2.0
+  action_dim: 29
+  mock: true
+esn:
+  target_hz: 100
+  model_path: data/models/esn_upsample.npz
+passthrough:
+  mode: zoh
+  target_hz: 100
+reasoning:
+  rate_hz: 5.0
+  policy: qwen
+data_collection:
+  enabled: true
+  out_dir: data/raw/ablation_no_esn_zoh
+  flush_every: 50
+gui:
+  host: 0.0.0.0
+  port: 8081
+  history: 300
+deploy:
+  nodes:
+  - gui
+  - camera
+  - vision
+  - mission
+  - state_publisher
+  - reasoning
+  - vla
+  - passthrough
+  - sim_bridge
+  - data_collector
