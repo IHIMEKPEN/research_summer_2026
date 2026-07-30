@@ -32,4 +32,4 @@ python3 -m s2r.cli deploy -c config/default.yaml
 pytest -q
 ```
 
-GPU UnifoLM: `research/requirements-unifolm-gpu.txt`. Details: [`research/README.md`](research/README.md).
+Deps: `pip install -r research/requirements.txt`. Details: [`research/README.md`](research/README.md).

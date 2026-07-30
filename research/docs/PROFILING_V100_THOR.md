@@ -6,7 +6,8 @@ Profile the open-source stack (YOLO, Qwen2.5 reasoner, Qwen2.5-VL, ESN) before d
 
 ```bash
 cd research
-pip install -e ".[models]"   # for real GPU runs
+pip install -r requirements.txt
+pip install -e ".[dev]"   # optional: s2r CLI
 
 # Always-safe mock timing (no weights download)
 python scripts/profile_models.py --backend mock --platform generic \

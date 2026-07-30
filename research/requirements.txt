@@ -1,17 +1,59 @@
-# Core research stack (mock profiling, ESN training, plotting).
-# GPU / OpenVLA: use requirements-gpu.txt instead (or install both).
+# ICRA 2027 — single install for UnifoLM + ESN + MuJoCo + S2R + notebooks.
 #
+#   cd research
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -U pip
 #   pip install -r requirements.txt
+#   pip install -e ".[dev]"          # optional: s2r CLI + pytest
 #
-# Python 3.10+ recommended.
+# Tested: Python 3.10, Tesla V100 32GB, Ubuntu 22.04, CUDA 12.1 wheels.
+#
+# OpenVLA needs transformers==4.40 (incompatible with UnifoLM ≥4.49).
+# Use a separate venv + requirements-openvla.txt for OpenVLA-only runs.
 
-numpy>=1.23,<3
+# ── Core / MuJoCo / notebooks ──────────────────────────────────────────────
+numpy>=1.26,<3
 scipy>=1.10
 matplotlib>=3.8
 pandas>=2.0
 tqdm>=4.27
 datasets>=2.18
 mujoco>=3.1.6
-
-# Jupyter notebooks (step1_openvla_profiling.ipynb)
 ipykernel>=6.29
+scikit-learn>=1.4
+
+# ── S2R deploy (ZMQ / GUI / CLI) ───────────────────────────────────────────
+pyzmq>=25.1
+msgpack>=1.0
+pyyaml>=6.0
+pydantic>=2.5
+fastapi>=0.110
+uvicorn[standard]>=0.27
+websockets>=12.0
+rich>=13.7
+typer>=0.12
+orjson>=3.9
+pytest>=8.0
+pytest-asyncio>=0.23
+
+# ── PyTorch (CUDA 12.1) ────────────────────────────────────────────────────
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+
+# ── UnifoLM-VLA-Base (Qwen2.5-VL + action head) ─────────────────────────────
+transformers>=4.49.0,<4.50
+accelerate>=0.29.0
+huggingface-hub>=0.19.3,<1.0
+tokenizers>=0.21,<0.22
+safetensors>=0.4.1
+pillow>=10.0
+qwen-vl-utils>=0.0.8
+jinja2>=3.1.0
+omegaconf>=2.3.0
+diffusers==0.35.1
+einops>=0.7.0
+bitsandbytes>=0.43.0,<0.50
+
+# unifolm-vla: clone sibling (no editable pip — that fails):
+#   git clone https://github.com/unitreerobotics/unifolm-vla.git ../unifolm-vla

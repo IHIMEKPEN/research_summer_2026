@@ -27,9 +27,9 @@ conda activate openvla_g1
 
 # ── 2. Core ML dependencies ─────────────────────────────────
 echo ""
-echo "[2] Installing PyTorch + HuggingFace stack (requirements-gpu.txt)..."
+echo "[2] Installing PyTorch + HuggingFace stack (requirements-openvla.txt)..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-pip install -r "${SCRIPT_DIR}/../requirements-gpu.txt"
+pip install -r "${SCRIPT_DIR}/../requirements-openvla.txt"
 pip install datasets
 
 # ── 3. OpenVLA ───────────────────────────────────────────────

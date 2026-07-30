@@ -50,11 +50,11 @@ git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
 cd unitree_sdk2_python
 pip install -e .
 
-# S2R pipeline
-cd /path/to/s2r
+# S2R / research pipeline
+cd /path/to/research_summer_2026/research
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e ".[models]"
+pip install -e ".[dev]"
 ```
 
 Optional ROS2 path: [`unitree_ros2`](https://github.com/unitreerobotics/unitree_ros2) for `/lowstate` `/lowcmd` debugging.

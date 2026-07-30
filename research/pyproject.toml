@@ -30,7 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3"]
 train = ["scikit-learn>=1.4", "torch>=2.2"]
-gpu = []  # see requirements-unifolm-gpu.txt / requirements-gpu.txt
+gpu = []  # use requirements.txt (UnifoLM) or requirements-openvla.txt
 models = [
   "torch>=2.2",
   "transformers>=4.45",

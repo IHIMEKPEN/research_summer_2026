@@ -52,21 +52,23 @@ research/
 
 ```bash
 cd research
-pip install -e ".[dev,train]"
+python3 -m venv .venv && source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+pip install -e ".[dev]"   # optional: s2r CLI + pytest
 
 # Steps 1–4
 python3 -m src.step3_dual_thread_mujoco --mock --duration_s 5
 python3 -m src.step3_control_baselines --method zoh --episode 0
 python3 -m src.step4_mujoco_evaluation --episode 0 --duration_s 12
 
-# Step 5 — S2R deploy (from research/)
+# Step 5 — S2R deploy
 python3 -m s2r.cli deploy -c config/default.yaml
 # GUI → http://127.0.0.1:8080
 
 pytest -q
 ```
 
-GPU stacks: `requirements-unifolm-gpu.txt`, `requirements-gpu.txt`.  
-S2R extras: `pip install -e ".[models,g1]"`.
+OpenVLA-only (separate venv): `pip install -r requirements-openvla.txt`.
 
 More: [`docs/`](docs/) · [`notebooks/README.md`](notebooks/README.md)

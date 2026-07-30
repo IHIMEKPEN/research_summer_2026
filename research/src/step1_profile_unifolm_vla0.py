@@ -209,7 +209,7 @@ def _unifolm_model_loader_classes() -> List[Any]:
         raise ImportError(
             f"transformers {transformers.__version__} is too old for UnifoLM (Qwen2.5-VL). "
             f"Need >= {'.'.join(map(str, UNIFOLM_MIN_TRANSFORMERS))}. "
-            "Use a separate venv: pip install -r requirements-unifolm-gpu.txt"
+            "Use a separate venv: pip install -r requirements.txt"
         )
 
     candidates = (
