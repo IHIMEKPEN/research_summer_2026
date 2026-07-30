@@ -22,6 +22,8 @@ Deadline: **15 Sep 2026**. Plan: `research/ACTION_PLAN.md`. Paper: `papers/icra2
 - Don't commit `research/results/`, `research/models/`, `cursor_chat_*.json`, or `*.mp4`.
 - Don't download UnifoLM/OpenVLA weights without explicit user ask; use `--mock` first.
 - Don't claim closed-loop success rates until live UnifoLM Step 3 logs exist.
+- Don't add `Co-authored-by: Cursor` (or any AI co-author) to commits. Enable repo hooks:
+  `git config core.hooksPath .githooks`
 
 ## Current stack
 

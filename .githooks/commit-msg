@@ -1,0 +1,8 @@
+#!/bin/sh
+# Strip Cursor co-author trailers so GitHub Contributors stays you-only.
+MSG_FILE="$1"
+if [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ]; then
+  tmp=$(mktemp)
+  sed '/^Co-authored-by: Cursor/d' "$MSG_FILE" | cat -s > "$tmp"
+  mv "$tmp" "$MSG_FILE"
+fi
