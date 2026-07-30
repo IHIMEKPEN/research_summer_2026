@@ -1,0 +1,15 @@
+{
+  "saved_at": "2026-07-30T15:38:55",
+  "results_dir": "/home/aihimekpen/research_summer_2026/research/results/step1_profiling_unifolm_vla0/nsight_systems_20260730_153855",
+  "profiler_source": "nsight_systems",
+  "run_tag": "nsight_systems_20260730_153855",
+  "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+  "vlm_backbone_id": "unitreerobotics/UnifoLM-VLM-Base",
+  "unnorm_key": "g1_clean_table",
+  "task_label": "G1_Clean_Table",
+  "max_new_tokens": 64,
+  "nsys_warmup_steps": 1,
+  "nsys_profile_steps": 3,
+  "nsys_timeout_s": 2700,
+  "python": "/raid/data/aihimekpen/venvs/research_summer_2026/bin/python"
+}

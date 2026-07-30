@@ -40,7 +40,7 @@ research/
 
 | Step | Module | Deliverable |
 |------|--------|-------------|
-| 1 | `src.step1_profile_unifolm_vla0` | UnifoLM latency (~508 ms / ~2 Hz) |
+| 1 | `src.step1_profile_unifolm_vla0` | UnifoLM latency (~573 ms / ~1.75 Hz, live) |
 | 2 | `src.step2_esn_cuda_ridge` | CUDA ESN + ridge `W_out` |
 | 3 | `src.step3_dual_thread_mujoco` + `step3_control_baselines` | Live/mock loop; ZOH/linear/PID |
 | 4 | `src.step4_mujoco_evaluation` | Wipe-table oracle + metrics |
@@ -52,10 +52,9 @@ research/
 
 ```bash
 cd research
-python3 -m venv .venv && source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
-pip install -e ".[dev]"   # optional: s2r CLI + pytest
+# One-shot: create .venv on /raid, install deps, register Jupyter kernel
+bash scripts/ensure_jupyter_kernel.sh
+source .venv/bin/activate
 
 # Steps 1–4
 python3 -m src.step3_dual_thread_mujoco --mock --duration_s 5
@@ -68,6 +67,9 @@ python3 -m s2r.cli deploy -c config/default.yaml
 
 pytest -q
 ```
+
+In Jupyter / Cursor notebooks, select kernel **Research Summer 2026 (UnifoLM)**.  
+Re-register anytime: `bash scripts/ensure_jupyter_kernel.sh`.
 
 OpenVLA-only (separate venv): `pip install -r requirements-openvla.txt`.
 

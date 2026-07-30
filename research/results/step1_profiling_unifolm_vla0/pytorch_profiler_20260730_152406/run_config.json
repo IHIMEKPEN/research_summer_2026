@@ -1,0 +1,16 @@
+{
+  "saved_at": "2026-07-30T15:24:06",
+  "results_dir": "/home/aihimekpen/research_summer_2026/research/results/step1_profiling_unifolm_vla0/pytorch_profiler_20260730_152406",
+  "mock": false,
+  "n_trials": 100,
+  "n_warmup": 2,
+  "n_profile_steps": 3,
+  "max_new_tokens": 64,
+  "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+  "vlm_backbone_id": "unitreerobotics/UnifoLM-VLM-Base",
+  "unnorm_key": "g1_clean_table",
+  "instruction": "Clean the table by moving all clutter items into the bin.",
+  "task_label": "G1_Clean_Table",
+  "profiler_source": "pytorch_profiler",
+  "run_tag": "pytorch_profiler_20260730_152406"
+}

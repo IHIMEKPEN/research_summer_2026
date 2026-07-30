@@ -17,9 +17,21 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 
-# Research outputs (regenerate locally)
-research/results/
-research/models/
+# Research outputs — keep small summaries visible in the IDE / @results;
+# ignore bulky binaries and raw traces.
+research/results/**/*.mp4
+research/results/**/*.png
+research/results/**/*.pdf
+research/results/**/*chrome_trace*
+research/results/**/inference_log.json
+research/results/**/vla_action_profiler_ops.json
+research/models/**
+!research/models/**/README.md
+!research/results/**/README.md
+!research/results/**/profiling_report.json
+!research/results/**/profiling_summary.txt
+!research/results/**/run_config.json
+!research/results/**/async_runtime.json
 
 # Step 5 / S2R runtime data (keep catalog + README)
 research/data/raw/*

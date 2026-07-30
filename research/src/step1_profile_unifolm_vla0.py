@@ -40,7 +40,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.paths import results_path
+from src.paths import mirror_result, results_path
 from src.unifolm_cuda_graph import VLACUDAGraphEngine, cuda_free_mib
 from src.unifolm_vla_runtime import AsyncVLARuntime, GPUActionRegister, PinnedHostTransfer
 
@@ -112,7 +112,38 @@ def make_run_results_dir(profiler_source: str, run_tag: Optional[str] = None) ->
     run_tag = run_tag or make_profile_run_tag(profiler_source)
     run_dir = RESULTS_BASE_DIR / run_tag
     run_dir.mkdir(parents=True, exist_ok=True)
+    _update_latest_symlink(run_dir)
     return run_dir
+
+
+def _update_latest_symlink(run_dir: Path) -> None:
+    """Point ``…/step1_profiling_unifolm_vla0/latest`` at this run."""
+    latest = RESULTS_BASE_DIR / "latest"
+    try:
+        if latest.is_symlink() or latest.exists():
+            latest.unlink()
+        latest.symlink_to(run_dir.resolve(), target_is_directory=True)
+    except OSError as exc:
+        logger.warning("Could not update latest symlink: %s", exc)
+
+
+def write_run_config(results_dir: Path, config: Dict[str, Any]) -> Path:
+    """Always persist notebook/CLI knobs for the run."""
+    results_dir = Path(results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    path = results_dir / "run_config.json"
+    payload = {
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "results_dir": str(results_dir.resolve()),
+        **config,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    _update_latest_symlink(results_dir)
+    mirror_result(path)
+    mirror_result(results_dir)
+    logger.info("Run config saved: %s", path)
+    return path
 
 
 # ── Mock G1 environment (sim interface) ─────────────────────
@@ -1342,10 +1373,12 @@ def plot_profiling_report(
     results_dir = results_dir or make_run_results_dir(report.profiler_source, report.run_tag)
     out_path = results_dir / "unifolm_vla0_profiling_report.pdf"
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.savefig(str(out_path).replace(".pdf", ".png"), dpi=150, bbox_inches="tight")
+    png_path = Path(str(out_path).replace(".pdf", ".png"))
+    plt.savefig(png_path, dpi=150, bbox_inches="tight")
     logger.info(f"Figure saved: {out_path}")
     plt.close()
-    return {"pdf_path": out_path, "png_path": Path(str(out_path).replace(".pdf", ".png"))}
+    _update_latest_symlink(results_dir)
+    return {"pdf_path": out_path, "png_path": png_path, "results_dir": results_dir}
 
 
 # ── Save JSON log ────────────────────────────────────────────
@@ -1387,6 +1420,9 @@ def save_logs(
         f.write(f"  Modes  : {report.failure_modes}\n")
 
     logger.info(f"Logs saved: {log_path}, {report_path}, {txt_path}")
+    _update_latest_symlink(results_dir)
+    for p in (log_path, report_path, txt_path, results_dir):
+        mirror_result(p)
     return {
         "log_path": log_path,
         "report_path": report_path,

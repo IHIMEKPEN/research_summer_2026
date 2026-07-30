@@ -1,0 +1,193 @@
+nsys child python: /raid/data/aihimekpen/venvs/research_summer_2026/bin/python
+2026-07-30 15:36:32,681 [INFO] MockG1CleanTableEnv initialised | DOF=29 | img=(224, 224)
+Loading UnifoLM (may download weights)…
+2026-07-30 15:36:33,322 [INFO] Loading model: unitreerobotics/UnifoLM-VLA-Base | INT4=False | FP16=True | cuda_graph=True
+
+Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]
+Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 996.51it/s]
+[2;36m07/30 [15:36:34][0m[2;36m [0m[34mINFO    [0m | >> [1m[[0m*[1m][0m Loading from local         ]8;id=14647463;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/share_tools.py\[2mshare_tools.py[0m]8;;\[2m:[0m]8;id=14647464;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/share_tools.py#199\[2m199[0m]8;;\
+[2;36m                 [0m         checkpoint path                     [2m                  [0m
+[2;36m                 [0m         `[35m/raid/data/aihimekpen/hf_cache/hub[0m [2m                  [0m
+[2;36m                 [0m         [35m/models--unitreerobotics--UnifoLM-V[0m [2m                  [0m
+[2;36m                 [0m         [35mLA-Base/snapshots/06fee5014922ba679[0m [2m                  [0m
+[2;36m                 [0m         [35m1cfe48d1e4aefac995dd8a2/checkpoints[0m [2m                  [0m
+[2;36m                 [0m         [35m/[0m[95mpytorch_model.pt[0m`                  [2m                  [0m
+/home/aihimekpen/research_summer_2026/research/results/step1_profiling_unifolm_vla0/nsight_systems_20260730_153628/nsys_runner.py
+Using G1_EE_6D constants:
+ in constants.py NUM_ACTIONS_CHUNK = 25
+  ACTION_DIM = 23
+  PROPRIO_DIM = 23
+  ACTION_PROPRIO_NORMALIZATION_TYPE = bounds_q99
+If needed, manually set the correct constants in `training/vla/constants.py`!
+
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:01<00:03,  1.14s/it]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:02<00:02,  1.16s/it]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:03<00:01,  1.15s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.09it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.01s/it]
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.48, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+Total number of DiT parameters:  588135424
+[2;36m07/30 [15:36:58][0m[2;36m [0m[33mWARNING [0m | >> [1m[[0m*[1m][0m Strict load failed;      ]8;id=14647471;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/base_framework.py\[2mbase_framework.py[0m]8;;\[2m:[0m]8;id=14647472;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/base_framework.py#93\[2m93[0m]8;;\
+[2;36m                 [0m         retrying non-strict. Missing      [2m                    [0m
+[2;36m                 [0m         [33mkeys[0m=[1;36m728[0m [1m([0mfirst [1;36m20[0m[1m)[0m:              [2m                    [0m
+[2;36m                 [0m         [1m[[0m[32m'qwen_vl_interface.model.model.e[0m [2m                    [0m
+[2;36m                 [0m         [32mmbed_tokens.weight'[0m,              [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.input_layernorm.weight'[0m,   [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.mlp.down_proj.weight'[0m,     [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.mlp.gate_proj.weight'[0m,     [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.mlp.up_proj.weight'[0m,       [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.post_attention_layernorm.w[0m [2m                    [0m
+[2;36m                 [0m         [32meight'[0m,                           [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.self_attn.k_proj.bias'[0m,    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.self_attn.k_proj.weight'[0m,  [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.self_attn.o_proj.weight'[0m,  [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.self_attn.q_proj.bias'[0m,    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.self_attn.q_proj.weight'[0m,  [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.self_attn.v_proj.bias'[0m,    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.0.self_attn.v_proj.weight'[0m,  [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.1.input_layernorm.weight'[0m,   [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.1.mlp.down_proj.weight'[0m,     [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.1.mlp.gate_proj.weight'[0m,     [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.1.mlp.up_proj.weight'[0m,       [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.1.post_attention_layernorm.w[0m [2m                    [0m
+[2;36m                 [0m         [32meight'[0m,                           [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.1.self_attn.k_proj.bias'[0m,    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32myers.1.self_attn.k_proj.weight'[0m[1m][0m  [2m                    [0m
+[2;36m                [0m[2;36m [0m[33mWARNING [0m | >> [1m[[0m*[1m][0m Strict load failed;      ]8;id=14647478;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/base_framework.py\[2mbase_framework.py[0m]8;;\[2m:[0m]8;id=14647479;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/base_framework.py#98\[2m98[0m]8;;\
+[2;36m                 [0m         retrying non-strict. Unexpected   [2m                    [0m
+[2;36m                 [0m         [33mkeys[0m=[1;36m728[0m [1m([0mfirst [1;36m20[0m[1m)[0m:              [2m                    [0m
+[2;36m                 [0m         [1m[[0m[32m'qwen_vl_interface.model.model.l[0m [2m                    [0m
+[2;36m                 [0m         [32manguage_model.embed_tokens.weight[0m [2m                    [0m
+[2;36m                 [0m         [32m'[0m,                                [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.input_layer[0m [2m                    [0m
+[2;36m                 [0m         [32mnorm.weight'[0m,                     [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.mlp.down_pr[0m [2m                    [0m
+[2;36m                 [0m         [32moj.weight'[0m,                       [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.mlp.gate_pr[0m [2m                    [0m
+[2;36m                 [0m         [32moj.weight'[0m,                       [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.mlp.up_proj[0m [2m                    [0m
+[2;36m                 [0m         [32m.weight'[0m,                         [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.post_attent[0m [2m                    [0m
+[2;36m                 [0m         [32mion_layernorm.weight'[0m,            [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.self_attn.k[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.bias'[0m,                      [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.self_attn.k[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.weight'[0m,                    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.self_attn.o[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.weight'[0m,                    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.self_attn.q[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.bias'[0m,                      [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.self_attn.q[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.weight'[0m,                    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.self_attn.v[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.bias'[0m,                      [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.0.self_attn.v[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.weight'[0m,                    [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.1.input_layer[0m [2m                    [0m
+[2;36m                 [0m         [32mnorm.weight'[0m,                     [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.1.mlp.down_pr[0m [2m                    [0m
+[2;36m                 [0m         [32moj.weight'[0m,                       [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.1.mlp.gate_pr[0m [2m                    [0m
+[2;36m                 [0m         [32moj.weight'[0m,                       [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.1.mlp.up_proj[0m [2m                    [0m
+[2;36m                 [0m         [32m.weight'[0m,                         [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.1.post_attent[0m [2m                    [0m
+[2;36m                 [0m         [32mion_layernorm.weight'[0m,            [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.1.self_attn.k[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.bias'[0m,                      [2m                    [0m
+[2;36m                 [0m         [32m'qwen_vl_interface.model.model.la[0m [2m                    [0m
+[2;36m                 [0m         [32mnguage_model.layers.1.self_attn.k[0m [2m                    [0m
+[2;36m                 [0m         [32m_proj.weight'[0m[1m][0m                    [2m                    [0m
+[2;36m                [0m[2;36m [0m[34mINFO    [0m | >> [1m[[0m*[1m][0m Checkpoint loaded with  ]8;id=14647485;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/base_framework.py\[2mbase_framework.py[0m]8;;\[2m:[0m]8;id=14647486;file:///home/aihimekpen/research_summer_2026/unifolm-vla/src/unifolm_vla/model/framework/base_framework.py#103\[2m103[0m]8;;\
+[2;36m                 [0m         [33mstrict[0m=[3;91mFalse[0m | [33mmissing[0m=[1;36m728[0m       [2m                     [0m
+[2;36m                 [0m         [33munexpected[0m=[1;36m728[0m                   [2m                     [0m
+Traceback (most recent call last):
+  File "/home/aihimekpen/research_summer_2026/research/results/step1_profiling_unifolm_vla0/nsight_systems_20260730_153628/nsys_runner.py", line 40, in <module>
+    print("Model ready; mock=", model.is_mock, flush=True)
+AttributeError: 'UnifoLMVLAWrapper' object has no attribute 'is_mock'
+The target application terminated. One or more process it created re-parented.
+Waiting for termination of re-parented processes.
+Use the `--wait` option to modify this behavior.
+Generating '/tmp/nsys-report-5962.qdstrm'
+
+[1/1] [0%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [0%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [====26%                     ] unifolm_vla0_nsys.nsys-rep
+[1/1] [===========53%              ] unifolm_vla0_nsys.nsys-rep
+[1/1] [8%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [5%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [6%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [7%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [8%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [5%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [0%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [7%                          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [10%                         ] unifolm_vla0_nsys.nsys-rep
+[1/1] [14%                         ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=17%                        ] unifolm_vla0_nsys.nsys-rep
+[1/1] [==21%                       ] unifolm_vla0_nsys.nsys-rep
+[1/1] [===24%                      ] unifolm_vla0_nsys.nsys-rep
+[1/1] [====27%                     ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=====31%                    ] unifolm_vla0_nsys.nsys-rep
+[1/1] [======34%                   ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=======38%                  ] unifolm_vla0_nsys.nsys-rep
+[1/1] [========41%                 ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=========45%                ] unifolm_vla0_nsys.nsys-rep
+[1/1] [==========48%               ] unifolm_vla0_nsys.nsys-rep
+[1/1] [===========51%              ] unifolm_vla0_nsys.nsys-rep
+[1/1] [============55%             ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=============58%            ] unifolm_vla0_nsys.nsys-rep
+[1/1] [==============61%           ] unifolm_vla0_nsys.nsys-rep
+[1/1] [===============65%          ] unifolm_vla0_nsys.nsys-rep
+[1/1] [================68%         ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=================72%        ] unifolm_vla0_nsys.nsys-rep
+[1/1] [==================75%       ] unifolm_vla0_nsys.nsys-rep
+[1/1] [==================78%       ] unifolm_vla0_nsys.nsys-rep
+[1/1] [===================82%      ] unifolm_vla0_nsys.nsys-rep
+[1/1] [====================85%     ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=====================89%    ] unifolm_vla0_nsys.nsys-rep
+[1/1] [======================92%   ] unifolm_vla0_nsys.nsys-rep
+[1/1] [=======================96%  ] unifolm_vla0_nsys.nsys-rep
+[1/1] [========================99% ] unifolm_vla0_nsys.nsys-rep
+[1/1] [========================100%] unifolm_vla0_nsys.nsys-rep
+[1/1] [========================100%] unifolm_vla0_nsys.nsys-rep
+Generated:
+    /home/aihimekpen/research_summer_2026/research/results/step1_profiling_unifolm_vla0/nsight_systems_20260730_153628/unifolm_vla0_nsys.nsys-rep

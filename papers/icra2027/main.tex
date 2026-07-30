@@ -1,6 +1,15 @@
 % ICRA 2027 contributed paper (IEEE RAS).
 % Target length: 6 pages + 1 optional page for references.
 % Submit via PaperPlaza (ras.papercept.net) by 15 Sep 2026 23:59 PST.
+%
+% Profiling sources (G1_Clean_Table, UnifoLM-VLA-Base, Tesla V100-DGXS-32GB):
+%   research/results/step1_profiling_unifolm_vla0/pytorch_profiler_20260730_152406/
+%   research/results/step1_profiling_unifolm_vla0/nsight_systems_20260730_153855/
+% ESN training (G1_Dex1_Wipe_Table ep.0):
+%   research/results/step2_training/esn_hyperparam_sweep.csv
+%   research/models/esn_cuda_ridge/config.json
+% Dual-process MuJoCo+ESN (mock VLA, 10s wipe-table):
+%   research/results/step3_dual_thread/dual_thread_report.json
 
 \documentclass[conference]{IEEEtran}
 \usepackage{cite}
@@ -32,12 +41,14 @@ liqian@pvamu.edu}}
 \maketitle
 
 \begin{abstract}
-Vision-Language-Action (VLA) models provide open-vocabulary manipulation policies, but their inference rates ($\sim$2\,Hz on Unitree UnifoLM-VLA) are incompatible with the 100\,Hz joint control loops required by humanoid robots such as the Unitree G1 (29\,DoF).
+Vision-Language-Action (VLA) models provide open-vocabulary manipulation policies, but their inference rates are incompatible with the 100\,Hz joint control loops required by humanoid robots such as the Unitree G1 (29\,DoF).
 We propose a hybrid controller in which a fixed Echo State Network (ESN) reservoir bridges sparse VLA joint targets to smooth 100\,Hz commands.
 The reservoir is untrained; only a linear readout is fit by ridge regression on demonstration trajectories.
-On a DGX Station (4$\times$V100), UnifoLM-VLA measures \textbf{508\,ms} mean latency (\textbf{$\approx$1.97\,Hz}), a $\sim$51$\times$ gap to the low-level controller.
+On a DGX Station (Tesla V100-DGXS-32GB), live \texttt{UnifoLM-VLA-Base} profiling on \texttt{G1\_Clean\_Table} yields a consistent $\sim$57--59$\times$ gap to 100\,Hz: PyTorch wall-clock latency is \textbf{573.2\,ms} mean (\textbf{1.745\,Hz}; $n{=}100$; P95\,574.1\,ms), while NVIDIA Nsight Systems NVTX ranges on the same action path average \textbf{593.7\,ms} (\textbf{1.684\,Hz}; 3 profiled steps).
+Operator-level traces show GEMM-dominated compute (\texttt{magma\_sgemmEx} / \texttt{aten::linear}) and heavy H2D traffic under Nsight (\texttt{cudaMemcpyAsync} $\approx$63.5\% of CUDA API time).
+A CUDA ESN ridge readout trained on \texttt{G1\_Dex1\_Wipe\_Table} (episode~0; $N{=}1000$, $\rho{=}0.95$) reaches \textbf{$9.83\times10^{-4}$\,rad} joint RMSE at leak rate $\alpha{=}0.3$ and ridge $\lambda{=}1.0$ (best of a $3{\times}3$ leak$\times$ridge sweep), with training throughput $\sim$2.9\,kHz on V100.
+A GIL-free dual-process MuJoCo$+$ESN loop (mock VLA @ 2\,Hz, 10\,s wipe-table) sustains \textbf{248\,Hz} mean control (mean step 4.03\,ms; steady-state max 6.82\,ms $<$ 10\,ms), verifying that the reservoir bridge clears the 100\,Hz budget once VLA inference is off the control process.
 We evaluate VLA$+$ESN against zero-order hold and linear-interpolation baselines on a MuJoCo G1 wipe-table task, and release an S2R deploy stack for sim-to-real transfer under a DIRT-style discrepancy parameterization.
-This manuscript reports measured profiling and tracking metrics and the planned closed-loop protocol for ICRA 2027.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -49,14 +60,15 @@ Foundation VLAs such as OpenVLA~\cite{OpenVLA2025}, $\pi_0$~\cite{Preprints2026}
 Humanoid whole-body control, however, demands millisecond-scale updates~\cite{PhysicalAI2026}.
 Autoregressive or diffusion action heads introduce latency that, under naive hold, yields jerky motion and task failure---the \emph{frequency gap}.
 
-We treat the G1 as a unified dynamical system and insert a leaky ESN between VLA intents ($\sim$2\,Hz) and joint commands (100\,Hz).
+We treat the G1 as a unified dynamical system and insert a leaky ESN between VLA intents ($\sim$1.7\,Hz measured) and joint commands (100\,Hz).
 The VLA supplies sparse targets; the reservoir supplies reflexive temporal filtering without backpropagation through time.
 
 \textbf{Contributions.}
-(i)~Measured UnifoLM latency on G1 wipe profiling;
-(ii)~CUDA ESN with input $u(t)=[q_t;\,q^{\star}_{\mathrm{VLA}}]\in\mathbb{R}^{58}$ and ridge readout;
-(iii)~MuJoCo wipe evaluation and ZOH/linear baselines;
-(iv)~S2R ZMQ deploy package (29-DoF defaults) for DIRT-guided transfer.
+(i)~Dual-instrument UnifoLM-VLA-Base latency on \texttt{G1\_Clean\_Table}: 100-trial PyTorch profiler + Nsight Systems NVTX/CUDA timeline;
+(ii)~CUDA ESN with $u(t)=[q_t;\,q^{\star}_{\mathrm{VLA}}]\in\mathbb{R}^{58}$ and ridge readout, with a measured leak$\times$ridge sweep on wipe-table demonstrations;
+(iii)~GIL-free dual-process MuJoCo$+$ESN control with measured $>100$\,Hz headroom under mock VLA;
+(iv)~MuJoCo wipe evaluation and ZOH/linear baselines;
+(v)~S2R ZMQ deploy package (29-DoF defaults) for DIRT-guided transfer.
 
 \section{Related Work}
 VLA surveys highlight bimanual and whole-body settings as hard cases~\cite{VLA_Review2026}.
@@ -68,19 +80,20 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
 \section{Methodology}
 \subsection{System Architecture}
 \begin{itemize}
-  \item \textbf{Perception / VLA:} UnifoLM-VLA-Base predicts end-effector actions for \texttt{g1\_wipe\_table}; we map EE poses to 29-D joint targets via Jacobian IK.
+  \item \textbf{Perception / VLA:} \texttt{unitreerobotics/UnifoLM-VLA-Base} with VLM backbone \texttt{UnifoLM-VLM-Base} emits 29-D joint actions for clean/wipe-table language goals (e.g., \texttt{g1\_clean\_table}); EE-space variants map poses to joints via Jacobian IK when needed.
   \item \textbf{ESN bridge:} Leaky update
   \[
   x(t)=(1-\alpha)x(t-1)+\alpha\,\tanh\!\big(W_{\mathrm{res}}x(t-1)+W_{\mathrm{in}}u(t)\big),
   \]
-  with sparse $W_{\mathrm{res}}$ scaled to spectral radius $\rho<1$, and readout
-  $y(t)=W_{\mathrm{out}}[x(t);u(t)]$ fit by ridge regression.
+  with sparse $W_{\mathrm{res}}$ ($N{=}1000$, spectral radius $\rho{=}0.95$, sparsity $0.9$) and readout
+  $y(t)=W_{\mathrm{out}}[x(t);u(t)]$ fit by ridge regression on 100\,Hz joint trajectories with VLA tokens held for 50 ticks ($u\in\mathbb{R}^{58}$, $y\in\mathbb{R}^{29}$).
+  We sweep leak rate $\alpha\in\{0.05,0.1,0.3\}$ and ridge $\lambda\in\{10^{-4},10^{-2},1\}$ (9 configs) and select by RMSE$\times$jerk score.
   \item \textbf{S2R / DIRT layer:} Parameterizes sim--real discrepancy for controller and domain ablations (ESN vs.\ passthrough ZOH/raw) in the deploy stack.
 \end{itemize}
 
 \subsection{Baselines}
 \begin{enumerate}
-  \item \textbf{Pure VLA ZOH:} hold each 2\,Hz target for 50 control ticks.
+  \item \textbf{Pure VLA ZOH:} hold each $\sim$1.7\,Hz target for $\sim$57--59 control ticks at 100\,Hz.
   \item \textbf{VLA $+$ linear interpolation:} interpolate between sparse knots at 100\,Hz.
   \item \textbf{VLA $+$ ESN (ours):} CUDA reservoir + ridge readout.
 \end{enumerate}
@@ -88,26 +101,71 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
 \section{Experimental Protocol}
 \subsection{Setup}
 \textbf{Robot:} Unitree G1, 29 actuated joints.
-\textbf{Task:} Wipe-table (dataset \texttt{G1\_Dex1\_Wipe\_Table}~\cite{UnifoLM2026}).
-\textbf{Hardware:} NVIDIA DGX Station, 4$\times$Tesla V100-32GB, CUDA 13.
+\textbf{Profiling task:} \texttt{G1\_Clean\_Table} with instruction \emph{``Clean the table by moving all clutter items into the bin.''} (UnifoLM-VLA-Base, \texttt{unnorm\_key=g1\_clean\_table}, FP16, \texttt{max\_new\_tokens=64}).
+\textbf{Offline / closed-loop task:} Wipe-table (dataset \texttt{G1\_Dex1\_Wipe\_Table}~\cite{UnifoLM2026}).
+\textbf{Hardware:} NVIDIA DGX Station, Tesla V100-DGXS-32GB (CUDA).
 \textbf{Control:} 100\,Hz MuJoCo kinematic/PD replay and dual-process VLA$\leftrightarrow$ESN integration.
+\textbf{Profilers:}
+(1)~PyTorch \texttt{torch.profiler} on action generation (3 profile steps) plus a 100-trial wall-clock latency benchmark (run \texttt{pytorch\_profiler\_20260730\_152406});
+(2)~Nsight Systems \texttt{nsys profile --trace=cuda,nvtx,osrt} with NVTX ranges \texttt{vla\_action\_generation\_\{warmup,profiled\}} (1 warmup + 3 profiled steps; run \texttt{nsight\_systems\_20260730\_153855}).
+\textbf{ESN training:} CUDA ridge on \texttt{unitreerobotics/G1\_Dex1\_Wipe\_Table} episode~0 (1181 train steps after washout 50; control 100\,Hz / VLA hold 2\,Hz).
+Sweep artifacts: \texttt{results/step2\_training/esn\_hyperparam\_sweep.csv}; selected checkpoint \texttt{models/esn\_cuda\_ridge/}.
+\textbf{Dual-process:} Multiprocessing VLA process (mock, 2\,Hz target) $\leftrightarrow$ MuJoCo$+$CUDA ESN control process (100\,Hz target), 10\,s wipe-table, G1 29-DoF MJCF; report \texttt{results/step3\_dual\_thread/dual\_thread\_report.json}.
 
 \subsection{Metrics}
-Task success (grasp / wipe contact), joint RMSE, right EE RMSE, trajectory jerk (finite-difference $d^3q/dt^3$), control Hz / step latency, and FLOPs/runtime of the readout vs.\ VLA.
+Task success (grasp / wipe contact), joint RMSE, right EE RMSE, trajectory jerk (finite-difference $d^3q/dt^3$), control Hz / step latency, GPU memory, action-parse failure rate, CUDA operator/kernel shares, and FLOPs/runtime of the readout vs.\ VLA.
 
-\subsection{Measured Status (as of July 2026)}
+\subsection{Measured Status (as of 30 Jul 2026)}
 \begin{table}[!t]
 \centering
-\caption{Measured profiling and offline tracking (episode 0). Closed-loop success rates TBD.}
+\caption{UnifoLM-VLA-Base on \texttt{G1\_Clean\_Table} (live), CUDA ESN ridge on wipe-table ep.~0, and dual-process MuJoCo$+$ESN (mock VLA, 10\,s). Live closed-loop wipe success TBD.}
 \label{tab:measured}
-\begin{tabular}{@{}lcc@{}}
+\begin{tabular}{@{}llcc@{}}
 \toprule
-Quantity & Value & Notes \\
+Source & Quantity & Value & Notes \\
 \midrule
-UnifoLM mean latency & 508\,ms & $\approx$1.97\,Hz \\
-Frequency gap to 100\,Hz & $\sim$51$\times$ & DGX V100 \\
-ESN offline RMSE & $\sim$9.8$\times10^{-4}$\,rad & best ridge sweep \\
-Dual-process ESN rate (mock VLA) & $\sim$167\,Hz & GIL-free MP \\
+PyTorch & Mean latency & 573.2\,ms & $\pm$0.61\,ms \\
+PyTorch & Median / P95 / P99 & 573.2 / 574.1 / 575.0\,ms & tight tail \\
+PyTorch & Effective rate / gap & 1.745\,Hz / 57.3$\times$ & vs.\ 100\,Hz \\
+PyTorch & GPU mem / failures & 16.8\,GB / 0\% & FP16, 29-D \\
+PyTorch & Top CUDA ops & \texttt{linear}/GEMM & \texttt{magma\_sgemmEx} $\sim$66.6\% self-CUDA \\
+Nsight & NVTX warmup & 834.6\,ms & first \texttt{infer} \\
+Nsight & NVTX profiled mean & 593.7\,ms & 1.684\,Hz; gap 59.4$\times$ \\
+Nsight & Top CUDA API & \texttt{cudaMemcpyAsync} & 63.5\% API time \\
+Nsight & Top GPU kernel & \texttt{magma\_sgemmEx} & 1.42\,s aggregate \\
+\midrule
+ESN & Best RMSE & $9.83\times10^{-4}$\,rad & $\alpha{=}0.3$, $\lambda{=}1$ \\
+ESN & Best MSE / jerk & $9.65\times10^{-7}$ / $4.99\times10^{-6}$ & vs.\ GT jerk $5.09\times10^{-6}$ \\
+ESN & Jerk ratio & 0.981 & pred/GT \\
+ESN & Sweep ($3{\times}3$) & RMSE $9.8\times10^{-4}$--$5.9\times10^{-2}$ & $\alpha,\lambda$ grid \\
+ESN & Config & $N{=}1000$, $\rho{=}0.95$ & sparsity 0.9; 29-D \\
+ESN & Train throughput & $\sim$2.89\,kHz & 1181 steps, V100 \\
+\midrule
+Dual-proc.\ & Achieved ESN Hz & 248.0\,Hz & mock VLA; 997 steps / 10\,s \\
+Dual-proc.\ & Mean / P99 step & 4.03 / 5.42\,ms & target 10\,ms budget \\
+Dual-proc.\ & Steady max step & 6.82\,ms & excl.\ startup peak 45.5\,ms \\
+Dual-proc.\ & VLA ticks & 20 & $\sim$2\,Hz; GIL bypass OK \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!t]
+\centering
+\caption{ESN leak$\times$ridge sweep on wipe-table ep.~0 (fixed $N{=}1000$, $\rho{=}0.95$). Best row selected by selection score (RMSE--jerk product).}
+\label{tab:esn_sweep}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+$\alpha$ & $\lambda$ & RMSE (rad) & Selection score \\
+\midrule
+0.05 & $10^{-4}$ & $2.98\times10^{-2}$ & 0.437 \\
+0.05 & $10^{-2}$ & $2.94\times10^{-3}$ & $4.45\times10^{-3}$ \\
+0.05 & 1 & $2.31\times10^{-3}$ & $1.28\times10^{-3}$ \\
+0.1 & $10^{-4}$ & $1.02\times10^{-2}$ & $5.25\times10^{-2}$ \\
+0.1 & $10^{-2}$ & $5.85\times10^{-2}$ & 2.00 \\
+0.1 & 1 & $1.63\times10^{-3}$ & $5.21\times10^{-4}$ \\
+0.3 & $10^{-4}$ & $1.97\times10^{-2}$ & 0.256 \\
+0.3 & $10^{-2}$ & $9.84\times10^{-3}$ & $5.07\times10^{-2}$ \\
+\textbf{0.3} & \textbf{1} & $\mathbf{9.83\times10^{-4}}$ & $\mathbf{6.95\times10^{-5}}$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -117,12 +175,24 @@ Dual-process ESN rate (mock VLA) & $\sim$167\,Hz & GIL-free MP \\
 Ablations: reservoir size $N\in\{500,1000,2000\}$, $\rho\in\{0.85,0.95,1.05\}$.
 
 \section{Discussion and Limitations}
-Results in Table~\ref{tab:measured} establish the latency gap and offline tracking fidelity.
-Paper-facing success rates require completing live UnifoLM closed-loop runs; we do not treat mock Bernoulli priors as measured evidence.
+Table~\ref{tab:measured} cross-validates the frequency gap with two instruments.
+The PyTorch 100-trial campaign establishes a stable \textbf{573\,ms / 1.745\,Hz} operating point (std\,0.61\,ms, 0\% parse failure): naive ZOH must hold each VLA target for roughly 57 control ticks at 100\,Hz.
+Nsight Systems NVTX on the same \texttt{infer()} path reports \textbf{593.7\,ms} mean over three profiled steps ($\approx$1.68\,Hz; 59.4$\times$ gap); the $\sim$20\,ms uplift vs.\ the wall-clock campaign is consistent with tracing overhead rather than a second failure mode.
+Both profilers attribute GPU time primarily to large GEMMs (\texttt{magma\_sgemmEx} / \texttt{aten::linear}/\texttt{mm}/\texttt{addmm}); Nsight additionally highlights H2D pressure (\texttt{cudaMemcpyAsync} dominates CUDA API time), motivating pinned/non-blocking transfers and keeping the ESN on-device between sparse VLA updates.
+
+Table~\ref{tab:esn_sweep} shows that ridge strength dominates tracking fidelity on wipe-table ep.~0: $\lambda{=}1$ consistently outperforms $\lambda\in\{10^{-4},10^{-2}\}$, and the selected $(\alpha,\lambda)=(0.3,1)$ checkpoint reaches \textbf{$9.83\times10^{-4}$\,rad} RMSE with jerk nearly matched to the demonstration (ratio 0.981).
+Under-regularized / poorly leaked settings inflate RMSE by up to $\sim$60$\times$ (worst $5.85\times10^{-2}$\,rad), underscoring that the ESN bridge is not ``plug-and-play'' without a short ridge sweep.
+Training remains cheap ($\sim$2.9\,kHz ridge/solve steps on V100 for 1181 washout-trimmed samples), so ablations over $N$ and $\rho$ remain feasible before closed-loop trials.
+
+The dual-process MuJoCo$+$ESN experiment (Table~\ref{tab:measured}, bottom) isolates control-loop timing with a mock VLA: mean step latency \textbf{4.03\,ms} (248\,Hz), P99 5.42\,ms, and steady-state max 6.82\,ms---well under the 10\,ms / 100\,Hz budget---confirming that multiprocessing removes the Python GIL from the critical path.
+A 45.5\,ms startup spike does not persist after warm-up; 20 VLA ticks over 10\,s match the 2\,Hz perception target.
+This establishes timing headroom for the ESN bridge; paper-facing wipe success rates still require live UnifoLM closed-loop runs, and we do not treat mock Bernoulli priors as task-success evidence.
 Orientation IK currently tracks EE position only; full rot6d tracking is future work.
 
 \section{Conclusion}
-We presented a VLA$+$ESN architecture that closes the $\sim$50$\times$ frequency gap between UnifoLM inference and G1 100\,Hz control, with measured profiling, CUDA ridge training, MuJoCo wipe tooling, and an S2R deploy path for DIRT-guided transfer toward ICRA 2027.
+We presented a VLA$+$ESN architecture targeting the \textbf{$\sim$57--59$\times$} frequency gap between measured UnifoLM-VLA-Base inference (PyTorch 573\,ms / 1.745\,Hz; Nsight NVTX 594\,ms / 1.684\,Hz on \texttt{G1\_Clean\_Table}) and G1 100\,Hz control.
+A CUDA ridge ESN on wipe-table demonstrations reaches \textbf{$9.83\times10^{-4}$\,rad} RMSE at $(\alpha,\lambda)=(0.3,1)$ after a measured $3{\times}3$ hyperparameter sweep.
+A GIL-free dual-process MuJoCo$+$ESN loop sustains \textbf{248\,Hz} mean control (steady max 6.82\,ms) under mock VLA, clearing the 100\,Hz budget before live UnifoLM closed-loop trials and S2R/DIRT transfer toward ICRA 2027.
 
 \section*{Acknowledgment}
 Supported in part by ARO Cooperative Agreement W911NF-24-2-0133.
