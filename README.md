@@ -16,7 +16,7 @@ research_summer_2026/
 │   ├── s2r/                  # Sim-to-real ZMQ package (29-DoF)
 │   ├── notebooks/
 │   ├── results/ · models/    # gitignored measured artifacts
-│   └── CLAUDE.md             # AI / contributor rules
+│   └── .cursor/rules via repo root   # Cursor rules only
 ├── papers/icra2027/          # IEEE draft
 ├── unifolm-vla/              # Upstream submodule
 └── .cursor/rules/            # Hardware + ICRA rules
