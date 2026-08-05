@@ -42,10 +42,14 @@ notebooks/step3_dual_thread_mujoco.ipynb    → MOCK=False, BRIDGE=esn|zoh|linea
 notebooks/step3_sim_comparison.ipynb        → one-shot offline + live suite
 ```
 
+Data split (`G1_Dex1_Wipe_Table`, 200 eps): **train 0–159 / held-out 160–199**  
+Card: `results/step2_training/DATASET_CARD.md`
+
 Reports land in:
-- `results/step1_baselines/baseline_comparison.csv`
-- `results/step3_dual_thread/dual_thread_report_{esn|zoh|linear}_live.json`
-- `results/step3_evaluation/sim_comparison_summary.json`
+- `results/step2_training/esn_heldout_eval.csv` (+ `DATASET_CARD.md`)
+- `results/step3_baselines/baseline_comparison.csv` (default: held-out)
+- `results/step3_dual_thread/dual_thread_report_{esn|zoh|linear|pid}_live.json`
+- `results/step4_mujoco_evaluation/mujoco_eval_summary_heldout.csv`
 
 CLI equivalents still exist (`python3 -m src.step3_*`) but notebooks are the primary workflow.
 

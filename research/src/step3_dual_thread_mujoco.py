@@ -55,7 +55,7 @@ from src.step2_esn_cuda_ridge import (
     DATASET_ID,
     load_checkpoint,
 )
-from src.step3_control_baselines import online_linear_command
+from src.step3_control_baselines import online_linear_command, online_pid_command
 from src.vla_ee_bridge import (
     EE_STATE_DIM,
     build_wipe_table_model,
@@ -65,7 +65,8 @@ from src.vla_ee_bridge import (
     resolve_robot_mjcf,
 )
 
-BridgeMode = Literal["esn", "zoh", "linear"]
+BridgeMode = Literal["esn", "zoh", "linear", "pid"]
+ALL_BRIDGES: tuple[BridgeMode, ...] = ("esn", "zoh", "linear", "pid")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -672,7 +673,7 @@ def _mujoco_control_worker(
     vla_hz: float = DEFAULT_VLA_HZ,
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    if bridge not in ("esn", "zoh", "linear"):
+    if bridge not in ALL_BRIDGES:
         result_queue.put(RuntimeError(f"Unknown bridge mode: {bridge}"))
         return
 
@@ -710,6 +711,7 @@ def _mujoco_control_worker(
 
     prev_token = init_joints.astype(np.float32).copy()
     curr_token = init_joints.astype(np.float32).copy()
+    pid_q = init_joints.astype(np.float32).copy()
     last_seq = 0
     ticks_since_update = 0
 
@@ -789,13 +791,16 @@ def _mujoco_control_worker(
                 cmd_np = esn.step_proprio(joint_gpu).detach().cpu().numpy()
             elif bridge == "zoh":
                 cmd_np = curr_token
-            else:  # linear
+            elif bridge == "linear":
                 cmd_np = online_linear_command(
                     prev_token=prev_token,
                     curr_token=curr_token,
                     ticks_since_update=ticks_since_update,
                     hold_ticks=hold_ticks,
                 )
+            else:  # pid
+                pid_q = online_pid_command(q=pid_q, target=curr_token, dt=dt)
+                cmd_np = pid_q
 
             env.apply_unified_control(cmd_np)
             env.step_physics()
@@ -1115,9 +1120,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--bridge",
-        choices=["esn", "zoh", "linear"],
+        choices=list(ALL_BRIDGES),
         default="esn",
-        help="100 Hz bridge: esn (ours), zoh, or linear",
+        help="100 Hz bridge: esn (ours), zoh, linear, or pid",
     )
     parser.add_argument("--record_video", action="store_true", help="Export benchmark MP4 (see Step 4 for full eval)")
     parser.add_argument("--episode", type=int, default=0, help="Dataset episode for init pose seeding")
@@ -1238,7 +1243,8 @@ def main() -> None:
     print("  Baselines in the same loop:")
     print("    python3 -m src.step3_dual_thread_mujoco --bridge zoh --duration_s 10")
     print("    python3 -m src.step3_dual_thread_mujoco --bridge linear --duration_s 10")
-    print("  Offline ZOH/linear table (no GPU VLA needed):")
+    print("    python3 -m src.step3_dual_thread_mujoco --bridge pid --duration_s 10")
+    print("  Offline ZOH/linear/PID table (no GPU VLA needed):")
     print("    python3 -m src.step3_control_baselines --all --episode 0")
     print("  Or run all sim comparisons via:")
     print("    python3 -m src.step3_sim_comparison --episode 0 --duration_s 10")

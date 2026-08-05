@@ -1,0 +1,23 @@
+{
+  "architecture": "multiprocessing",
+  "task": "g1_wipe_table",
+  "bridge": "linear",
+  "mock_vla": false,
+  "mjcf": "/home/aihimekpen/research/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.xml",
+  "esn_checkpoint": null,
+  "duration_s": 10.0,
+  "control_hz_target": 100.0,
+  "vla_hz_target": 2.0,
+  "steps": 1000,
+  "mean_step_ms": 4.480165130458772,
+  "max_step_ms": 7.779934909194708,
+  "max_step_ms_steady": 7.779934909194708,
+  "p99_step_ms": 6.7857815977185965,
+  "achieved_control_hz": 223.20605845561752,
+  "achieved_esn_hz": null,
+  "vla_ticks": 150,
+  "vla_register_sequence": 151,
+  "gil_bypass_ok": true,
+  "max_step_ms_threshold": 10.0,
+  "video_path": null
+}

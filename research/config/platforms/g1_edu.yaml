@@ -148,7 +148,8 @@ g1:
   mock: false
   mode: high_level
   iface: eth0
-  network: 192.168.123.164
+  # Lab G1 Ethernet IP from whiteboard 2026-08-05 (was 192.168.123.164 typical)
+  network: 192.168.123.161
   control_hz: 50
 data_collection:
   enabled: true

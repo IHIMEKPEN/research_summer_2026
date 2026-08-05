@@ -24,7 +24,15 @@ Everything (perception, decisions, commands, metrics) is logged by `data_collect
 
 ## 1. Network & access
 
-1. Connect host PC ↔ G1 Ethernet (typical robot IP `192.168.123.164`).
+Lab whiteboard credentials (transcribed 2026-08-05; source image: [`assets/g1_lab_whiteboard_2026-08-05.png`](assets/g1_lab_whiteboard_2026-08-05.png)):
+
+| Link | SSH | Notes |
+|---|---|---|
+| Ethernet | `ssh unitree@192.168.123.161` | Preferred for deploy / DDS |
+| WiFi | `ssh unitree@10.54.182.34` | DHCP — re-check if unreachable |
+| Password | `123` | Unitree default; change if rotated on-site |
+
+1. Connect host PC ↔ G1 Ethernet (this lab robot: `192.168.123.161`; other units often use `192.168.123.164`).
 2. SSH into the G1 compute unit (Ubuntu + ROS2 Humble on Edu images).
 3. Confirm interface name (`ip link`) — often `eth0` / `enp*`.
 4. Set in config:
@@ -34,9 +42,11 @@ g1:
   mock: false
   mode: high_level
   iface: eth0
-  network: "192.168.123.164"
+  network: "192.168.123.161"
   control_hz: 50
 ```
+
+Pub/sub socket map from the same whiteboard (demo / teaching topology — not identical to `config/platforms/g1_edu.yaml` ZMQ names): see [G1_LAB_WHITEBOARD_NOTES.md](G1_LAB_WHITEBOARD_NOTES.md).
 
 Official docs: [Unitree developer quick start](https://support.unitree.com/home/en/developer/Quick_start)
 

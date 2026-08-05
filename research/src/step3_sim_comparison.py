@@ -6,8 +6,8 @@ Author: Osemudiamen Andrew Ihimekpen | PVAMU CREDIT Center
 ============================================================
 
 Completes the missing sim experiments for this week:
-  1) Offline ZOH / linear (/ PID) vs demo joints  → results/step1_baselines/
-  2) Optional live UnifoLM MuJoCo runs for esn/zoh/linear
+  1) Offline ZOH / linear (/ PID) vs demo joints  → results/step3_baselines/
+  2) Optional live UnifoLM MuJoCo runs for esn/zoh/linear/pid
      → results/step3_dual_thread/dual_thread_report_{bridge}_live.json
 
 Usage (from research/):
@@ -18,7 +18,7 @@ Usage (from research/):
   python3 -m src.step3_sim_comparison --episode 0 --duration_s 10
 
   # Live only, ESN then baselines
-  python3 -m src.step3_sim_comparison --skip_offline --bridges esn,zoh,linear --duration_s 10
+  python3 -m src.step3_sim_comparison --skip_offline --bridges esn,zoh,linear,pid --duration_s 10
 
 Next week (hardware): Jetson AGX Thor + G1 via s2r — do not block on that here.
 """
@@ -40,7 +40,7 @@ from src.step3_control_baselines import run_all_baselines, write_comparison_tabl
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-OFFLINE_DIR = results_path("step1_baselines")
+OFFLINE_DIR = results_path("step3_baselines")
 LIVE_DIR = results_path("step3_dual_thread")
 EVAL_DIR = results_path("step3_evaluation")
 
@@ -117,7 +117,7 @@ def main() -> None:
     parser.add_argument(
         "--bridges",
         type=str,
-        default="esn,zoh,linear",
+        default="esn,zoh,linear,pid",
         help="Comma-separated bridge modes for live MuJoCo runs",
     )
     parser.add_argument(

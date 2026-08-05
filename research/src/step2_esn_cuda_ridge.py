@@ -13,6 +13,9 @@ ridge λ for low MSE + low jerk, and saves the best smoothed readout.
 Usage (from research/):
   python3 -m src.step2_esn_cuda_ridge
   python3 -m src.step2_esn_cuda_ridge --episode 0 --reservoir_size 2000
+  # Multi-episode (canonical split: train 0-159, held-out 160-199):
+  python3 -m src.step2_esn_cuda_ridge --train_episodes train --heldout_episodes heldout
+  python3 -m src.step2_esn_cuda_ridge --train_episodes 0-15 --heldout_episodes 160-163  # smoke
 
 Inference:
   from src.step2_esn_cuda_ridge import load_checkpoint
@@ -29,7 +32,7 @@ import logging
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -39,6 +42,7 @@ from datasets import load_dataset
 
 from src.paths import models_path, results_path
 from src.trajectory_metrics import compute_jerk_metric, compute_physical_jerk_rms
+from src.wipe_dataset import HELDOUT_EPISODES, TRAIN_EPISODES, parse_episode_spec
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -594,6 +598,144 @@ def train_esn_on_episode(
 
 
 @torch.no_grad()
+def accumulate_ridge_stats(
+  esn: EchoStateNetwork,
+  joint_states: torch.Tensor,
+  vla_targets: torch.Tensor,
+  ground_truth: torch.Tensor,
+  xtx: Optional[torch.Tensor] = None,
+  xty: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
+  """
+  Drive one episode and accumulate XᵀX / XᵀY for multi-episode ridge.
+
+  Avoids concatenating all extended states in memory when training on
+  many wipe demos (160 train episodes ≈ hours of 100 Hz states).
+  """
+  wo = esn.cfg.washout
+  extended = esn.collect_extended_states(joint_states, vla_targets)
+  targets = ground_truth[wo:]
+  feat = extended.shape[1]
+  if xtx is None:
+    xtx = torch.zeros(feat, feat, device=extended.device, dtype=extended.dtype)
+  if xty is None:
+    xty = torch.zeros(feat, targets.shape[1], device=extended.device, dtype=extended.dtype)
+  xtx += extended.T @ extended
+  xty += extended.T @ targets
+  return xtx, xty, int(extended.shape[0])
+
+
+def fit_readout_from_stats(
+  xtx: torch.Tensor,
+  xty: torch.Tensor,
+  ridge_alpha: float,
+) -> torch.Tensor:
+  """Solve W_out from accumulated ridge normal equations."""
+  reg = ridge_alpha * torch.eye(xtx.shape[0], device=xtx.device, dtype=xtx.dtype)
+  w_out_t = torch.linalg.solve(xtx + reg, xty)
+  return w_out_t.T.contiguous()
+
+
+@torch.no_grad()
+def evaluate_esn_on_episode(
+  esn: EchoStateNetwork,
+  joint_states: torch.Tensor,
+  vla_targets: torch.Tensor,
+  ground_truth: torch.Tensor,
+) -> Dict[str, float]:
+  """Open-loop tracking metrics on one episode (requires fitted W_out)."""
+  if esn.W_out is None:
+    raise RuntimeError("W_out is not fitted")
+  wo = esn.cfg.washout
+  extended = esn.collect_extended_states(joint_states, vla_targets)
+  preds = predict_from_extended(esn.W_out, extended)
+  targets = ground_truth[wo:]
+  metrics = evaluate_predictions(preds, targets)
+  metrics["gt_jerk"] = compute_jerk_metric(targets)
+  metrics["jerk_ratio"] = metrics["jerk"] / (metrics["gt_jerk"] + 1e-12)
+  metrics["steps"] = int(targets.shape[0])
+  return metrics
+
+
+def train_esn_on_episodes(
+  esn: EchoStateNetwork,
+  dataset,
+  train_episodes: Sequence[int],
+  device: torch.device,
+) -> Dict[str, float]:
+  """Fit W_out on many episodes via accumulated ridge statistics."""
+  episodes = list(train_episodes)
+  if not episodes:
+    raise ValueError("train_episodes is empty")
+
+  xtx: Optional[torch.Tensor] = None
+  xty: Optional[torch.Tensor] = None
+  n_steps = 0
+  t0 = time.perf_counter()
+  for i, ep in enumerate(episodes, start=1):
+    joint_states, vla_targets = load_episode_tensors(dataset, ep, device)
+    ground_truth = joint_states
+    xtx, xty, n = accumulate_ridge_stats(
+      esn, joint_states, vla_targets, ground_truth, xtx=xtx, xty=xty,
+    )
+    n_steps += n
+    if i == 1 or i == len(episodes) or i % 10 == 0:
+      logger.info(
+        "Ridge accumulate [%d/%d] ep=%d (+%d steps, total=%d)",
+        i, len(episodes), ep, n, n_steps,
+      )
+
+  assert xtx is not None and xty is not None
+  esn.W_out = fit_readout_from_stats(xtx, xty, esn.cfg.ridge_alpha)
+  fit_s = time.perf_counter() - t0
+
+  # In-sample metrics on first train episode (cheap sanity; full train mean optional).
+  js0, vla0 = load_episode_tensors(dataset, episodes[0], device)
+  metrics = evaluate_esn_on_episode(esn, js0, vla0, js0)
+  metrics.update({
+    "train_steps": float(n_steps),
+    "n_train_episodes": float(len(episodes)),
+    "fit_time_s": fit_s,
+    "leaky_rate": esn.cfg.leaky_rate,
+    "ridge_alpha": esn.cfg.ridge_alpha,
+    "train_metrics_episode": float(episodes[0]),
+  })
+  logger.info(
+    "Multi-ep train done | eps=%d steps=%d | ep%d RMSE=%.6f jerk=%.6f (%.1fs)",
+    len(episodes), n_steps, episodes[0], metrics["rmse"], metrics["jerk"], fit_s,
+  )
+  return metrics
+
+
+def evaluate_esn_on_episodes(
+  esn: EchoStateNetwork,
+  dataset,
+  episodes: Sequence[int],
+  device: torch.device,
+) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
+  """Per-episode + mean open-loop metrics (held-out or train)."""
+  rows: List[Dict[str, Any]] = []
+  for ep in episodes:
+    js, vla = load_episode_tensors(dataset, ep, device)
+    m = evaluate_esn_on_episode(esn, js, vla, js)
+    row = {"episode": int(ep), **m}
+    rows.append(row)
+    logger.info("Eval ep=%d RMSE=%.6f jerk=%.3e", ep, m["rmse"], m["jerk"])
+
+  if not rows:
+    return rows, {}
+  mean = {
+    "n_episodes": float(len(rows)),
+    "rmse_mean": float(np.mean([r["rmse"] for r in rows])),
+    "rmse_std": float(np.std([r["rmse"] for r in rows])),
+    "mse_mean": float(np.mean([r["mse"] for r in rows])),
+    "jerk_mean": float(np.mean([r["jerk"] for r in rows])),
+    "jerk_std": float(np.std([r["jerk"] for r in rows])),
+  }
+  return rows, mean
+
+
+@torch.no_grad()
 def benchmark_step_hz(esn: EchoStateNetwork, input_dim: int, n_warmup: int = 100, n_iters: int = 2000) -> float:
   """Estimate reservoir update throughput on the current CUDA device."""
   u = torch.randn(input_dim, device=esn.device)
@@ -613,16 +755,27 @@ def _build_checkpoint_payload(
   metrics: Dict[str, float],
   *,
   episode_index: Optional[int] = None,
+  train_episodes: Optional[Sequence[int]] = None,
+  heldout_episodes: Optional[Sequence[int]] = None,
+  heldout_metrics: Optional[Dict[str, float]] = None,
   dataset_id: str = DATASET_ID,
 ) -> Dict[str, Any]:
   w_res_coo = esn.W_res.to_sparse_coo().cpu()
+  train_eps = list(train_episodes) if train_episodes is not None else (
+    [int(episode_index)] if episode_index is not None else None
+  )
   return {
     "checkpoint_version": CHECKPOINT_VERSION,
     "model": "EchoStateNetwork",
     "config": esn.cfg.__dict__,
     "metrics": metrics,
     "dataset_id": dataset_id,
-    "episode_index": episode_index,
+    "episode_index": episode_index if episode_index is not None else (
+      train_eps[0] if train_eps else None
+    ),
+    "train_episodes": train_eps,
+    "heldout_episodes": list(heldout_episodes) if heldout_episodes is not None else None,
+    "heldout_metrics": heldout_metrics,
     "control_hz": CONTROL_HZ,
     "vla_hz": VLA_HZ,
     "vla_hold_steps": VLA_HOLD_STEPS,
@@ -640,6 +793,9 @@ def save_checkpoint(
   out_dir: Union[str, Path],
   *,
   episode_index: Optional[int] = None,
+  train_episodes: Optional[Sequence[int]] = None,
+  heldout_episodes: Optional[Sequence[int]] = None,
+  heldout_metrics: Optional[Dict[str, float]] = None,
   dataset_id: str = DATASET_ID,
   basename: str = CHECKPOINT_BASENAME,
 ) -> Dict[str, Path]:
@@ -658,18 +814,28 @@ def save_checkpoint(
     raise RuntimeError("Cannot save — W_out has not been fitted.")
 
   payload = _build_checkpoint_payload(
-    esn, metrics, episode_index=episode_index, dataset_id=dataset_id,
+    esn,
+    metrics,
+    episode_index=episode_index,
+    train_episodes=train_episodes,
+    heldout_episodes=heldout_episodes,
+    heldout_metrics=heldout_metrics,
+    dataset_id=dataset_id,
   )
   pt_path = out_dir / f"{basename}.pt"
   pth_path = out_dir / f"{basename}.pth"
   torch.save(payload, pt_path)
   torch.save(payload, pth_path)
 
+  train_eps = payload.get("train_episodes")
   meta = {
     "checkpoint_version": CHECKPOINT_VERSION,
     "model": "EchoStateNetwork",
     "dataset_id": dataset_id,
-    "episode_index": episode_index,
+    "episode_index": payload.get("episode_index"),
+    "train_episodes": train_eps,
+    "heldout_episodes": payload.get("heldout_episodes"),
+    "heldout_metrics": heldout_metrics,
     "control_hz": CONTROL_HZ,
     "vla_hz": VLA_HZ,
     "vla_hold_steps": VLA_HOLD_STEPS,
@@ -757,7 +923,42 @@ def load_checkpoint(
 def main() -> None:
   parser = argparse.ArgumentParser(description="Train CUDA ESN readout with ridge regression")
   parser.add_argument("--dataset", type=str, default=DATASET_ID)
-  parser.add_argument("--episode", type=int, default=0, help="Episode index to train on")
+  parser.add_argument(
+    "--episode",
+    type=int,
+    default=None,
+    help="Legacy single-episode train (overrides --train_episodes if set)",
+  )
+  parser.add_argument(
+    "--train_episodes",
+    type=str,
+    default="train",
+    help="Episode spec: train|0-159|0,1,2 (default: canonical train 0-159)",
+  )
+  parser.add_argument(
+    "--heldout_episodes",
+    type=str,
+    default="heldout",
+    help="Episode spec for generalization eval (default: heldout 160-199)",
+  )
+  parser.add_argument(
+    "--sweep_episodes",
+    type=str,
+    default=None,
+    help="Episodes for hyperparam sweep (default: first train episode only)",
+  )
+  parser.add_argument(
+    "--max_train_episodes",
+    type=int,
+    default=None,
+    help="Optional cap on train list (smoke / debug)",
+  )
+  parser.add_argument(
+    "--max_heldout_episodes",
+    type=int,
+    default=None,
+    help="Optional cap on held-out eval list",
+  )
   parser.add_argument("--reservoir_size", type=int, default=1000)
   parser.add_argument("--spectral_radius", type=float, default=0.95)
   parser.add_argument("--sparsity", type=float, default=0.90)
@@ -781,18 +982,39 @@ def main() -> None:
   device = torch.device(args.device)
   logger.info("Device: %s (%s)", device, torch.cuda.get_device_name(device))
 
+  if args.episode is not None:
+    train_episodes = [int(args.episode)]
+  else:
+    train_episodes = parse_episode_spec(args.train_episodes)
+  if args.max_train_episodes is not None:
+    train_episodes = train_episodes[: max(0, int(args.max_train_episodes))]
+  heldout_episodes = parse_episode_spec(args.heldout_episodes)
+  if args.max_heldout_episodes is not None:
+    heldout_episodes = heldout_episodes[: max(0, int(args.max_heldout_episodes))]
+  if args.sweep_episodes:
+    sweep_episodes = parse_episode_spec(args.sweep_episodes)
+  else:
+    sweep_episodes = [train_episodes[0]]
+
   logger.info("Loading dataset %s ...", args.dataset)
   dataset = load_dataset(args.dataset, split="train")
-
-  joint_states, vla_targets = load_episode_tensors(dataset, args.episode, device)
-  ground_truth = joint_states.clone()
   logger.info(
-    "Episode %d → %d steps @ %.0f Hz (%.2f s)",
-    args.episode,
-    joint_states.shape[0],
-    CONTROL_HZ,
-    joint_states.shape[0] / CONTROL_HZ,
+    "Train eps=%d %s… | sweep eps=%s | held-out eps=%d %s…",
+    len(train_episodes),
+    train_episodes[:5],
+    sweep_episodes,
+    len(heldout_episodes),
+    heldout_episodes[:5],
   )
+
+  # Sweep uses (pooled) first sweep episode by default for speed.
+  sweep_js, sweep_vla = load_episode_tensors(dataset, sweep_episodes[0], device)
+  if len(sweep_episodes) > 1:
+    logger.info(
+      "Note: hyperparam sweep uses episode %d only; final fit uses all train episodes.",
+      sweep_episodes[0],
+    )
+  sweep_gt = sweep_js.clone()
 
   base_cfg = ESNCudaConfig(
     reservoir_size=args.reservoir_size,
@@ -816,14 +1038,17 @@ def main() -> None:
       base_cfg.leaky_rate,
       base_cfg.ridge_alpha,
     )
-    metrics = train_esn_on_episode(esn, joint_states, vla_targets, ground_truth)
+    if len(train_episodes) == 1:
+      metrics = train_esn_on_episode(esn, sweep_js, sweep_vla, sweep_gt)
+    else:
+      metrics = train_esn_on_episodes(esn, dataset, train_episodes, device)
     sweep_df = None
   else:
     sweep_df, best_row = run_hyperparameter_sweep(
       base_cfg,
-      joint_states,
-      vla_targets,
-      ground_truth,
+      sweep_js,
+      sweep_vla,
+      sweep_gt,
       device,
       jerk_weight=args.jerk_weight,
     )
@@ -831,48 +1056,68 @@ def main() -> None:
     sweep_df.drop(columns=[], errors="ignore").to_csv(sweep_csv, index=False)
     logger.info("Sweep results saved: %s", sweep_csv)
 
-    esn, metrics = train_best_esn_from_sweep(
-      base_cfg, best_row, joint_states, vla_targets, ground_truth, device,
+    cfg = replace(
+      base_cfg,
+      leaky_rate=float(best_row["leaky_rate"]),
+      ridge_alpha=float(best_row["ridge_alpha"]),
     )
+    esn = EchoStateNetwork(cfg, device=device).to(device)
+    if len(train_episodes) == 1:
+      esn, metrics = train_best_esn_from_sweep(
+        base_cfg, best_row, sweep_js, sweep_vla, sweep_gt, device,
+      )
+    else:
+      metrics = train_esn_on_episodes(esn, dataset, train_episodes, device)
+      metrics["selection_score"] = float(best_row["selection_score"])
 
   metrics["step_hz"] = benchmark_step_hz(esn, esn.cfg.input_dim)
   logger.info("Reservoir step throughput: %.1f Hz (target >100 Hz)", metrics["step_hz"])
+
+  heldout_rows: List[Dict[str, Any]] = []
+  heldout_mean: Dict[str, float] = {}
+  if heldout_episodes:
+    heldout_rows, heldout_mean = evaluate_esn_on_episodes(
+      esn, dataset, heldout_episodes, device,
+    )
+    held_csv = sweep_dir / "esn_heldout_eval.csv"
+    pd.DataFrame(heldout_rows).to_csv(held_csv, index=False)
+    (sweep_dir / "esn_heldout_summary.json").write_text(json.dumps(heldout_mean, indent=2))
+    logger.info("Held-out summary: %s", heldout_mean)
+    logger.info("Held-out per-episode CSV: %s", held_csv)
 
   artifact_paths = save_checkpoint(
     esn,
     metrics,
     out_dir,
-    episode_index=args.episode,
+    episode_index=train_episodes[0],
+    train_episodes=train_episodes,
+    heldout_episodes=heldout_episodes,
+    heldout_metrics=heldout_mean or None,
     dataset_id=args.dataset,
     basename=BEST_CHECKPOINT_BASENAME,
   )
 
   print("\n" + "=" * 60)
-  print("  ESN CUDA Ridge Training — Phase 2 (smoothed)")
+  print("  ESN CUDA Ridge Training — Phase 2 (multi-episode)")
   print("=" * 60)
-  print(f"  Dataset episode : {args.episode}")
-  print(f"  Trajectory steps: {joint_states.shape[0]:,} @ {CONTROL_HZ:.0f} Hz")
+  print(f"  Train episodes  : {len(train_episodes)}  ({train_episodes[0]}…{train_episodes[-1]})")
+  print(f"  Held-out episodes: {len(heldout_episodes)}")
+  print(f"  Canonical split : train={len(TRAIN_EPISODES)} heldout={len(HELDOUT_EPISODES)}")
   print(f"  VLA hold period : {VLA_HOLD_STEPS} steps ({VLA_HZ:.0f} Hz)")
   print(f"  Reservoir N     : {esn.cfg.reservoir_size}")
   print(f"  Best α_leak     : {metrics.get('leaky_rate', esn.cfg.leaky_rate):.2f}")
   print(f"  Best ridge λ    : {metrics.get('ridge_alpha', esn.cfg.ridge_alpha):.1e}")
-  print(f"  Tracking MSE    : {metrics['mse']:.6f}")
-  print(f"  Tracking RMSE   : {metrics['rmse']:.6f} rad")
-  print(f"  Output jerk     : {metrics['jerk']:.6f}")
-  print(f"  GT jerk         : {metrics.get('gt_jerk', float('nan')):.6f}")
-  print(f"  Jerk ratio      : {metrics.get('jerk_ratio', float('nan')):.2f}x")
+  print(f"  Train-ref RMSE  : {metrics['rmse']:.6f} rad (ep {int(metrics.get('train_metrics_episode', train_episodes[0]))})")
+  if heldout_mean:
+    print(
+      f"  Held-out RMSE   : {heldout_mean['rmse_mean']:.6f} ± {heldout_mean['rmse_std']:.6f} rad "
+      f"(n={int(heldout_mean['n_episodes'])})"
+    )
   print(f"  Step throughput : {metrics['step_hz']:.1f} Hz")
   print(f"  Best .pth       : {artifact_paths['pth']}")
   print(f"  Config JSON     : {artifact_paths['json']}")
   if sweep_df is not None:
     print(f"  Sweep CSV       : {sweep_dir / 'esn_hyperparam_sweep.csv'}")
-    print("\n  Top-3 configs by selection score:")
-    top3 = sweep_df.nsmallest(3, "selection_score")
-    for _, row in top3.iterrows():
-      print(
-        f"    α={row['leaky_rate']:.2f} λ={row['ridge_alpha']:.1e} "
-        f"MSE={row['mse']:.6f} jerk={row['jerk']:.6f} score={row['selection_score']:.4f}"
-      )
   print("=" * 60)
 
 

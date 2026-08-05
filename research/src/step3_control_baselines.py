@@ -21,7 +21,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Literal, Sequence
+from typing import Dict, List, Literal, Sequence
 
 import numpy as np
 
@@ -31,11 +31,12 @@ from src.step2_esn_cuda_ridge import (
     evaluate_predictions,
     load_episode_trajectory_numpy,
 )
+from src.wipe_dataset import parse_episode_spec, split_name_for_episodes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-RESULTS_DIR = results_path("step1_baselines")
+RESULTS_DIR = results_path("step3_baselines")
 Method = Literal["zoh", "linear", "pid"]
 ALL_METHODS: Sequence[Method] = ("zoh", "linear", "pid")
 
@@ -132,6 +133,28 @@ def online_linear_command(
     return ((1.0 - alpha) * prev + alpha * curr).astype(np.float32)
 
 
+def online_pid_command(
+    *,
+    q: np.ndarray,
+    target: np.ndarray,
+    kp: float = 0.4,
+    kd: float = 0.05,
+    dt: float = 1.0 / CONTROL_HZ,
+) -> np.ndarray:
+    """
+    Causal joint-space PID step toward the latest VLA target.
+
+    Matches ``upsample_pid`` dynamics: integrate a virtual command state
+    toward the held/current sparse target (classical feedback baseline).
+    """
+    q = np.asarray(q, dtype=np.float64).reshape(-1)
+    target = np.asarray(target, dtype=np.float64).reshape(-1)
+    err = target - q
+    dq = kd * (err / max(float(dt), 1e-6))
+    q_next = q + float(dt) * (kp * err + dq)
+    return q_next.astype(np.float32)
+
+
 def run_baseline(method: Method, episode: int) -> BaselineResult:
     gt, vla = load_episode_trajectory_numpy(episode)
     if method == "zoh":
@@ -165,6 +188,36 @@ def run_all_baselines(episode: int, methods: Sequence[Method] = ALL_METHODS) -> 
     return [run_baseline(m, episode) for m in methods]
 
 
+def run_baselines_multi(
+    episodes: Sequence[int],
+    methods: Sequence[Method] = ALL_METHODS,
+) -> List[BaselineResult]:
+    results: List[BaselineResult] = []
+    for ep in episodes:
+        results.extend(run_all_baselines(int(ep), methods=methods))
+    return results
+
+
+def summarize_baselines_by_method(results: Sequence[BaselineResult]) -> List[Dict[str, float]]:
+    """Mean±std RMSE/jerk per method across episodes."""
+    by_m: Dict[str, List[BaselineResult]] = {}
+    for r in results:
+        by_m.setdefault(r.method, []).append(r)
+    rows: List[Dict[str, float]] = []
+    for method, rs in by_m.items():
+        rmses = [x.rmse for x in rs]
+        jerks = [x.jerk for x in rs]
+        rows.append({
+            "method": method,
+            "n_episodes": float(len(rs)),
+            "rmse_mean": float(sum(rmses) / len(rmses)),
+            "rmse_std": float((sum((x - sum(rmses) / len(rmses)) ** 2 for x in rmses) / max(len(rmses), 1)) ** 0.5),
+            "jerk_mean": float(sum(jerks) / len(jerks)),
+            "jerk_std": float((sum((x - sum(jerks) / len(jerks)) ** 2 for x in jerks) / max(len(jerks), 1)) ** 0.5),
+        })
+    return rows
+
+
 def write_comparison_table(results: List[BaselineResult], out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = [asdict(r) for r in results]
@@ -179,6 +232,16 @@ def write_comparison_table(results: List[BaselineResult], out_dir: Path) -> Path
         for r in results
     )
     csv_path.write_text(header + body)
+
+    summary = summarize_baselines_by_method(results)
+    (out_dir / "baseline_comparison_summary.json").write_text(json.dumps(summary, indent=2))
+    sum_csv = out_dir / "baseline_comparison_summary.csv"
+    if summary:
+        keys = list(summary[0].keys())
+        sum_csv.write_text(
+            ",".join(keys) + "\n"
+            + "".join(",".join(str(row[k]) for k in keys) + "\n" for row in summary)
+        )
     logger.info("Wrote comparison table: %s", csv_path)
     return csv_path
 
@@ -186,7 +249,13 @@ def write_comparison_table(results: List[BaselineResult], out_dir: Path) -> Path
 def main() -> None:
     parser = argparse.ArgumentParser(description="VLA control baselines (ZOH / linear / PID)")
     parser.add_argument("--method", choices=["zoh", "linear", "pid"], default="zoh")
-    parser.add_argument("--episode", type=int, default=0)
+    parser.add_argument("--episode", type=int, default=None, help="Single episode (legacy)")
+    parser.add_argument(
+        "--episodes",
+        type=str,
+        default="heldout",
+        help="Episode spec: heldout|train|all|0-199|160-163 (default: heldout)",
+    )
     parser.add_argument(
         "--all",
         action="store_true",
@@ -195,10 +264,16 @@ def main() -> None:
     args = parser.parse_args()
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    if args.episode is not None:
+        episodes = [int(args.episode)]
+    else:
+        episodes = parse_episode_spec(args.episodes)
+    tag = split_name_for_episodes(episodes)
+
     if args.all:
-        results = run_all_baselines(args.episode)
+        results = run_baselines_multi(episodes)
         for result in results:
-            out = RESULTS_DIR / f"baseline_{result.method}_ep{args.episode}.json"
+            out = RESULTS_DIR / f"baseline_{result.method}_ep{result.episode}.json"
             out.write_text(json.dumps(asdict(result), indent=2))
             logger.info(
                 "%s ep=%d RMSE=%.6f jerk=%.6e → %s",
@@ -209,21 +284,30 @@ def main() -> None:
                 out,
             )
         write_comparison_table(results, RESULTS_DIR)
-        print(json.dumps([asdict(r) for r in results], indent=2))
+        # Also keep a tagged copy for train vs heldout campaigns.
+        tagged = RESULTS_DIR / f"baseline_comparison_{tag}.csv"
+        tagged.write_text((RESULTS_DIR / "baseline_comparison.csv").read_text())
+        print(json.dumps({
+            "episodes": episodes,
+            "split": tag,
+            "summary": summarize_baselines_by_method(results),
+        }, indent=2))
         return
 
-    result = run_baseline(args.method, args.episode)
-    out = RESULTS_DIR / f"baseline_{args.method}_ep{args.episode}.json"
-    out.write_text(json.dumps(asdict(result), indent=2))
-    logger.info(
-        "%s ep=%d RMSE=%.6f jerk=%.6e → %s",
-        result.method,
-        result.episode,
-        result.rmse,
-        result.jerk,
-        out,
-    )
-    print(json.dumps(asdict(result), indent=2))
+    results = [run_baseline(args.method, ep) for ep in episodes]
+    for result in results:
+        out = RESULTS_DIR / f"baseline_{result.method}_ep{result.episode}.json"
+        out.write_text(json.dumps(asdict(result), indent=2))
+        logger.info(
+            "%s ep=%d RMSE=%.6f jerk=%.6e → %s",
+            result.method,
+            result.episode,
+            result.rmse,
+            result.jerk,
+            out,
+        )
+    write_comparison_table(results, RESULTS_DIR)
+    print(json.dumps([asdict(r) for r in results], indent=2))
 
 
 if __name__ == "__main__":

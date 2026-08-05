@@ -1,23 +1,23 @@
 {
   "init_episode": 0,
   "control_mode": "kinematic",
-  "tracking_rmse": 0.001370375471807485,
-  "grasp_frames": 1047,
-  "trajectory_steps": 6000,
+  "tracking_rmse": 0.0013631825764202005,
+  "grasp_frames": 213,
+  "trajectory_steps": 1231,
   "video_path": "/home/aihimekpen/research_summer_2026/research/results/step4_mujoco_evaluation/table_wipe_benchmark.mp4",
   "task_metrics": {
-    "joint_rmse": 0.001370375471807485,
-    "joint_mse": 1.877928933731587e-06,
+    "joint_rmse": 0.0013631825764202005,
+    "joint_mse": 1.8582667366556159e-06,
     "right_ee_rmse_m": 0.09626006440887105,
     "max_cloth_jump_m": 0.03851484736007755,
-    "mean_cloth_jump_m": 0.0007119958136942326,
+    "mean_cloth_jump_m": 0.0007598746701019951,
     "grasp_proximity_error_m": 0.13963295501430137,
     "grasp_success": true,
-    "false_attach_frames": 8,
-    "grasp_frames": 1047,
-    "wipe_path_length_m": 3.460174166399717,
-    "table_contact_ratio": 0.0038204393505253103,
-    "wipe_phase_frames": 1047,
-    "steps": 6000
+    "false_attach_frames": 2,
+    "grasp_frames": 213,
+    "wipe_path_length_m": 0.6906279794823428,
+    "table_contact_ratio": 0.004694835680751174,
+    "wipe_phase_frames": 213,
+    "steps": 1231
   }
 }

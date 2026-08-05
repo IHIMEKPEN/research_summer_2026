@@ -15,6 +15,8 @@ Step 3 remains **dual-process only** (VLA @ 2 Hz + ESN @ 100 Hz).
 
 Usage (from research/):
   python3 -m src.step4_mujoco_evaluation --episode 0
+  python3 -m src.step4_mujoco_evaluation --episodes heldout --no_video
+  python3 -m src.step4_mujoco_evaluation --episodes 160-162 --video_episode 160
   python3 -m src.step4_mujoco_evaluation --control_mode pd --duration_s 12
   python3 -m src.step4_mujoco_evaluation --duration_s 60 --loop   # multi-loop (large video)
 """
@@ -27,7 +29,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -56,6 +58,7 @@ from src.step3_dual_thread_mujoco import (
     resolve_mjcf_path,
     save_video_mp4,
 )
+from src.wipe_dataset import parse_episode_spec, split_name_for_episodes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -363,11 +366,58 @@ def print_eval_summary(stats: MuJoCoEvalStats, *, report_path: Path) -> None:
     print("=" * 60)
 
 
+def _stats_to_report(
+    stats: MuJoCoEvalStats,
+    *,
+    episode: int,
+    control_mode: str,
+    ckpt: Path,
+    meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "step": 4,
+        "task": "g1_wipe_table",
+        "dataset_id": DATASET_ID,
+        "init_episode": episode,
+        "control_mode": control_mode,
+        "esn_checkpoint": str(ckpt),
+        "esn_train_episodes": meta.get("train_episodes"),
+        "esn_heldout_episodes": meta.get("heldout_episodes"),
+        "esn_step2_mse": meta.get("metrics", {}).get("mse"),
+        "tracking_mse": stats.tracking_mse,
+        "tracking_rmse": stats.tracking_rmse,
+        "grasp_frames": stats.grasp_frames,
+        "task_metrics": stats.task_metrics.to_dict() if stats.task_metrics else None,
+        "trajectory_steps": stats.trajectory_steps,
+        "steps": stats.steps,
+        "mean_step_ms": stats.mean_step_ms,
+        "video_path": stats.video_path,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 4 MuJoCo wipe-table evaluation")
     parser.add_argument("--mjcf", type=str, default=None)
     parser.add_argument("--esn_checkpoint", type=str, default=str(models_path("esn_cuda_ridge")))
-    parser.add_argument("--episode", type=int, default=0)
+    parser.add_argument("--episode", type=int, default=None, help="Single episode (legacy)")
+    parser.add_argument(
+        "--episodes",
+        type=str,
+        default="heldout",
+        help="Episode spec: heldout|train|0-199|160-163 (default: heldout)",
+    )
+    parser.add_argument(
+        "--max_episodes",
+        type=int,
+        default=None,
+        help="Optional cap on episode list (smoke)",
+    )
+    parser.add_argument(
+        "--video_episode",
+        type=int,
+        default=None,
+        help="Record video only for this episode (default: first episode if video on)",
+    )
     parser.add_argument(
         "--duration_s",
         type=float,
@@ -393,44 +443,91 @@ def main() -> None:
     ckpt = resolve_esn_checkpoint(args.esn_checkpoint)
     meta = load_esn_checkpoint_metadata(ckpt)
 
-    config = MuJoCoEvalConfig(
-        mjcf_path=mjcf,
-        esn_checkpoint=str(ckpt),
-        init_episode=args.episode,
-        duration_s=args.duration_s,
-        control_hz=args.control_hz,
-        vla_hz=args.vla_hz,
-        control_mode=args.control_mode,
-        record_video=not args.no_video,
-        video_fps=args.video_fps,
-        device=args.device,
-        loop_episode=bool(args.loop),
-    )
-    stats = MuJoCoWipeEvaluator(config).run()
+    if args.episode is not None:
+        episodes = [int(args.episode)]
+    else:
+        episodes = parse_episode_spec(args.episodes)
+    if args.max_episodes is not None:
+        episodes = episodes[: max(0, int(args.max_episodes))]
+    tag = split_name_for_episodes(episodes)
 
-    report = {
-        "step": 4,
-        "task": "g1_wipe_table",
-        "dataset_id": DATASET_ID,
-        "init_episode": args.episode,
+    want_video = not args.no_video
+    video_ep = int(args.video_episode) if args.video_episode is not None else (
+        episodes[0] if want_video else None
+    )
+
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    reports: List[Dict[str, Any]] = []
+    for ep in episodes:
+        record_video = want_video and video_ep is not None and int(ep) == int(video_ep)
+        video_path = RESULTS_DIR / f"table_wipe_ep{ep}_oracle_esn.mp4"
+        config = MuJoCoEvalConfig(
+            mjcf_path=mjcf,
+            esn_checkpoint=str(ckpt),
+            init_episode=int(ep),
+            duration_s=args.duration_s,
+            control_hz=args.control_hz,
+            vla_hz=args.vla_hz,
+            control_mode=args.control_mode,
+            record_video=record_video,
+            video_path=video_path if record_video else None,
+            video_fps=args.video_fps,
+            device=args.device,
+            loop_episode=bool(args.loop),
+        )
+        stats = MuJoCoWipeEvaluator(config).run()
+        report = _stats_to_report(
+            stats, episode=int(ep), control_mode=args.control_mode, ckpt=ckpt, meta=meta,
+        )
+        ep_path = RESULTS_DIR / f"mujoco_eval_report_ep{ep}.json"
+        ep_path.write_text(json.dumps(report, indent=2))
+        reports.append(report)
+        print_eval_summary(stats, report_path=ep_path)
+
+    summary = {
+        "split": tag,
+        "episodes": episodes,
+        "n_episodes": len(episodes),
         "control_mode": args.control_mode,
         "esn_checkpoint": str(ckpt),
-        "esn_step2_mse": meta.get("metrics", {}).get("mse"),
-        "tracking_mse": stats.tracking_mse,
-        "tracking_rmse": stats.tracking_rmse,
-        "grasp_frames": stats.grasp_frames,
-        "task_metrics": stats.task_metrics.to_dict() if stats.task_metrics else None,
-        "trajectory_steps": stats.trajectory_steps,
-        "steps": stats.steps,
-        "mean_step_ms": stats.mean_step_ms,
-        "video_path": stats.video_path,
+        "esn_train_episodes": meta.get("train_episodes"),
+        "tracking_rmse_mean": float(np.mean([r["tracking_rmse"] for r in reports])),
+        "tracking_rmse_std": float(np.std([r["tracking_rmse"] for r in reports])),
+        "grasp_success_rate": float(
+            np.mean([
+                1.0 if (r.get("task_metrics") or {}).get("grasp_success") else 0.0
+                for r in reports
+            ])
+        ),
+        "reports": reports,
     }
-    report_path = RESULTS_DIR / "mujoco_eval_report.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
+    summary_path = RESULTS_DIR / f"mujoco_eval_summary_{tag}.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    # Convenience pointer to latest multi-ep (or single) campaign.
+    (RESULTS_DIR / "mujoco_eval_report.json").write_text(json.dumps(summary, indent=2))
 
-    print_eval_summary(stats, report_path=report_path)
+    # Flat CSV for paper tables
+    csv_path = RESULTS_DIR / f"mujoco_eval_summary_{tag}.csv"
+    lines = [
+        "episode,tracking_rmse,grasp_success,wipe_path_m,table_contact_ratio,max_cloth_jump_m,video_path\n"
+    ]
+    for r in reports:
+        tm = r.get("task_metrics") or {}
+        lines.append(
+            f"{r['init_episode']},{r['tracking_rmse']:.8f},"
+            f"{int(bool(tm.get('grasp_success')))},"
+            f"{float(tm.get('wipe_path_length_m', float('nan'))):.6f},"
+            f"{float(tm.get('table_contact_ratio', float('nan'))):.6f},"
+            f"{float(tm.get('max_cloth_jump_m', float('nan'))):.6f},"
+            f"{r.get('video_path') or ''}\n"
+        )
+    csv_path.write_text("".join(lines))
+    print(f"\nMulti-episode summary: {summary_path}")
+    print(f"CSV: {csv_path}")
+    print(
+        f"RMSE mean±std: {summary['tracking_rmse_mean']:.5f} ± {summary['tracking_rmse_std']:.5f} | "
+        f"grasp success rate={summary['grasp_success_rate']:.1%}"
+    )
 
 
 if __name__ == "__main__":
