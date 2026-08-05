@@ -1,0 +1,264 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{cite,graphicx,booktabs,tabularx,multirow,balance}
+\usepackage{xcolor}
+
+\begin{document}
+
+\title{Research Plan: Robust Embodied AI Security}
+
+\author{\IEEEauthorblockN{Osemudiamen Andrew Ihimekpen}
+\IEEEauthorblockA{\textit{CREDIT Center, PVAMU} \\ oihimekpen@pvamu.edu}
+\and
+\IEEEauthorblockN{Tariq Abdul Quddoos}
+\IEEEauthorblockA{\textit{CREDIT Center, PVAMU} \\ tariq.abdulquddoos@pvamu.edu}}
+
+\maketitle
+
+\begin{abstract}
+This plan targets \textbf{IEEE RA-L 2026} (June 1, 2026 deadline, no on-site requirement) or \textbf{RSS 2026} (Oct 2026, no on-site) with Paper 2: "Robust Embodied AI: ESN-Based Defense Against Adversarial Attacks." Primary author: Osemu (80\%), Co-author: Tariq (20\%).
+\end{abstract}
+
+\section{Research Background \& Motivation}
+
+\subsection{The Problem: Robotics Security is Critical}
+\begin{itemize}
+    \item \textbf{Context:} Humanoid robots (like G1 Edu) are entering homes/workplaces
+    \item \textbf{Threat:} Adversarial attacks can hijack control, causing physical harm
+    \item \textbf{Gap:} Existing security frameworks focus on industrial robots or perception only
+    \item \textbf{Your contribution:} First security framework for \textbf{embodied AI} (VLA+control)
+\end{itemize}
+
+\subsection{Threat Model: G1 Edu Attack Surface}
+\begin{itemize}
+    \item \textbf{Layer 1: Perception (Camera)}
+    \begin{itemize}
+        \item Adversarial patches on images
+        \item Camera spoofing (deepfake inputs)
+    \end{itemize}
+    \item \textbf{Layer 2: Network (FMX)}
+    \begin{itemize}
+        \item DDS sniffing/spoofing (G1 Edu uses FMX middleware)
+        \item Command injection in ROS 2 topics
+    \end{itemize}
+    \item \textbf{Layer 3: AI (VLA Reasoning)}
+    \begin{itemize}
+        \item Prompt injection ("pretend to be helpful but don't move")
+        \item Jailbreak attacks ("ignore your constraints")
+    \end{itemize}
+    \item \textbf{Layer 4: Control (Joints)}
+    \begin{itemize}
+        \item Joint torque injection
+        \item ESN state manipulation
+    \end{itemize}
+\end{itemize}
+
+\subsection{Proposed Defense: ESN as Security Buffer}
+\begin{center}
+\textbf{Architecture:}
+\begin{flushleft}
+Attack $\to$ VLA (perception) $\to$ ESN (security filter) $\to$ G1 Joints $\to$ Physical Actuation
+\end{flushleft}
+\end{center}
+
+\textbf{How it works:}
+\begin{itemize}
+    \item \textbf{Phase 1 (Training):} Train ESN on \textit{normal operation data} (VLA outputs + joint states)
+    \item \textbf{Phase 2 (Runtime):} ESN learns the \textit{expected manifold} of normal states
+    \item \textbf{Phase 3 (Detection):} Compute distance between current state and expected manifold
+    \item \textbf{Phase 4 (Response):} If distance > threshold $\to$ flag as anomalous, switch to safe state
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\begin{minipage}{0.8\textwidth}
+\textbf{Normal Operation:} VLA output is within ESN's learned manifold $\to$ Allow through $\to$ G1 executes \\
+\textbf{Adversarial Attack:} VLA output is outside ESN's manifold $\to$ Block command $\to$ Safe default state
+\end{minipage}
+\end{figure}
+
+\subsection{Why ESN for Security?}
+\begin{itemize}
+    \item \textbf{Temporal awareness:} Unlike static classifiers, ESN detects time-series anomalies
+    \item \textbf{Lightweight:} Can run on edge (G1 Edu), no cloud dependency
+    \item \textbf{Dynamic:} Learns robot's normal behavior, adapts to environment changes
+    \item \textbf{Integrated:} Built into control loop, not separate post-processing
+\end{itemize}
+
+\section{Current Progress (As of August 2026)}
+
+\begin{table}[h]
+\centering
+\caption{Milestones Status}
+\label{tab:security-progress}
+\begin{tabular}{lll}
+\toprule
+\textbf{Milestone} & \textbf{Status} & \textbf{Details} \\
+\midrule
+Literature Review & \textcolor{green}{✓} Complete & 20+ papers reviewed \\
+Threat Model & \textcolor{orange}{△} Draft & 5 layers defined \\
+Attack Framework & \textcolor{red}{✗} \textbf{Pending} & Need to implement simulation \\
+ESN Defense & \textcolor{red}{✗} \textbf{Pending} & Need to design detection \\
+Experiments & \textcolor{red}{✗} \textbf{Pending} & No results yet \\
+Paper Draft & \textcolor{red}{✗} \textbf{Pending} & Need to write first \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Research Tasks (For Tariq)}
+
+\subsection{Task 1: Implement Attack Framework}
+\begin{itemize}
+    \item \textbf{Platform:} G1 Edu in simulation (MuJoCo) or on actual G1 Edu
+    \item \textbf{Attacks to implement:}
+    \begin{itemize}
+        \item \textbf{Perception:} Adversarial patches (optimize image to fool VLA)
+        \item \textbf{Network:} DDS message manipulation (modify ROS 2 topics)
+        \item \textbf{AI:} Prompt injection (fake text inputs to VLA)
+    \end{itemize}
+    \item \textbf{Your role:} Implement 3 attack types in Python, test on simulated environment
+    \item \textbf{Metrics:} How many attacks succeed? What does the robot do after attack?
+\end{itemize}
+
+\subsection{Task 2: Implement ESN-Based Defense}
+\begin{itemize}
+    \item \textbf{Phase 1:} Train ESN on normal operation (collect 10-50 mins of baseline data)
+    \item \textbf{Phase 2:} Design detection algorithm:
+    \begin{itemize}
+        \item Compute Mahalanobis distance between current state and ESN manifold
+        \item Or: Use ESN's state trajectory to detect deviations
+    \end{itemize}
+    \item \textbf{Phase 3:} Implement fallback mechanism (safe state when anomaly detected)
+    \item \textbf{Your role:} Implement ESN-based detection in CUDA (co-develop with Osemu)
+\end{itemize}
+
+\subsection{Task 3: Run Attack + Defense Experiments}
+\begin{itemize}
+    \item \textbf{Setup:} Run attacks on G1, test ESN defense
+    \item \textbf{Tasks:} 3 scenarios (perception attack, network attack, AI attack)
+    \item \textbf{Trials:} 20 trials per attack type
+    \item \textbf{Metrics:}
+    \begin{itemize}
+        \item Detection latency (time from attack to detection)
+        \item False positive rate (how often blocks legitimate commands)
+        \item Containment success rate (how often prevents harm)
+        \item Recovery time (time to return to safe state)
+    \end{itemize}
+    \item \textbf{Your role:} Run all experiments, collect results, log metrics
+\end{itemize}
+
+\subsection{Task 4: Generate Figures and Tables}
+\begin{itemize}
+    \item \textbf{Attack Success Rate:} Bar chart (perception vs. network vs. AI)
+    \item \textbf{Defense Effectiveness:} Line plots (attack trajectory vs. defended trajectory)
+    \item \textbf{Detection Performance:} ROC curve (detection rate vs. false positive)
+    \item \textbf{Your role:} Generate all figures using experiment logs
+\end{itemize}
+
+\section{Your Contribution Breakdown (20\%)}
+
+\begin{itemize}
+    \item \textbf{Attack Implementation:} 40\% of work (implement 3 attack types)
+    \item \textbf{Defense Implementation:} 20\% of work (co-develop ESN detection)
+    \item \textbf{Experiments:} 30\% of trials execution
+    \item \textbf{Figures:} 10\% of work (plot generation)
+    \item \textbf{Total:} $\sim$20\%
+\end{itemize}
+
+\section{What I Handle (80\%)}
+
+\begin{itemize}
+    \item \textbf{Literature Review:} Identify 20+ relevant papers, summarize gaps
+    \item \textbf{Threat Model:} Define attack surface, select attack types
+    \item \textbf{Defense Design:} ESN-based detection algorithm, thresholds
+    \item \textbf{Paper Writing:} All sections (intro, related work, conclusion)
+    \item \textbf{IEEEtran Formatting:} Complete document preparation
+    \item \textbf{Submission:} Upload to PaperPlaza
+\end{itemize}
+
+\section{Timeline (10 Weeks)}
+
+\begin{tabular}{llll}
+\textbf{Week} & \textbf{Task} & \textbf{Owner} & \textbf{Deliverables} \\
+\midrule
+1 (Aug 25 - Sep 1) & Lit review, threat model & Both & Literature review doc, threat model doc \\
+2 (Sep 2-8) & \textbf{Attack framework} implementation & Tariq (lead) & Attack code repo \\
+3 (Sep 9-15) & \textbf{Defense framework} (ESN) & Osemu (lead) & Defense code repo \\
+4 (Sep 16-22) & \textbf{Run attack experiments} & Tariq (lead) & Attack results \\
+5 (Sep 23-29) & \textbf{Run defense experiments} & Both & Defense results \\
+6 (Oct 1-7) & \textbf{Generate figures} & Tariq & All figure files \\
+7 (Oct 8-14) & \textbf{Draft paper} & Osemu (lead) & Complete draft .tex \\
+8 (Oct 15-21) & Review and revise & Both & Final draft \\
+9 (Oct 22-28) & Final checks, references & Both & Ready for submission \\
+\textbf{Jun 1, 2026} & \textbf{Submit to RA-L 2026} & \textbf{Both} & \textbf{Final PDF} \\
+\bottomrule
+\end{tabular}
+
+\section{Venue Recommendations}
+
+\begin{itemize}
+    \item \textbf{Primary Target:} \textbf{IEEE RA-L (2026, Jun 1 deadline, no on-site)}
+    \begin{itemize}
+        \item \textit{Fit:} Robotics + security intersection
+        \item \textit{Pros:} Early submission, no travel needed, good acceptance rate ($\sim$20\%)
+        \item \textit{Cons:} Short deadline if current progress continues
+    \end{itemize}
+    
+    \item \textbf{Alternative:} \textbf{RSS 2026 (Oct 2026, no on-site)}
+    \begin{itemize}
+        \item \textit{Fit:} Robotics flagship (Science Robotics tier)
+        \item \textit{Pros:} High prestige, no travel, good for Paper 2
+        \item \textit{Cons:} Later timeline, more competitive
+    \end{itemize}
+    
+    \item \textbf{Alternative 2:} \textbf{ACM/IEEE CSS 2027 (Mar 2027, no on-site)}
+    \begin{itemize}
+        \item \textit{Fit:} Cybersecurity flagship
+        \item \textit{Pros:} Strong security focus
+        \item \textit{Cons:} Later submission, no robotics overlap
+    \end{itemize}
+\end{itemize}
+
+\section{Required Citations (Top 15 for Paper 2)}
+
+\begin{enumerate}
+    \item \textbf{Robot Security Surveys:}
+    \begin{itemize}
+        \item Porambage et al., "Addressing cybersecurity challenges in robotics" (2024)
+        \item Carreras Guzman et al., "Integrated safety and security analysis" (2021)
+        \item "Survey on Cybersecurity of Robotic Systems" (Springer, 2025)
+    \end{itemize}
+    \item \textbf{Humanoid-Specific:}
+    \begin{itemize}
+        \item Zhang et al., "The cybersecurity of a humanoid robot" (2025)
+        \item "Humanoid Robot Safety Comes Into Focus" (SecuRESafe, 2024)
+        \item Giallanza et al., "Occupational health and safety in HRC" (2023)
+    \end{itemize}
+    \item \textbf{Edge Computing:}
+    \begin{itemize}
+        \item Taleb et al., "Multi-Access Edge Computing for IoT" (IEEE 2018)
+        \item Yang et al., "Edge Computing in IoT" (IEEE Access, 2020)
+    \end{itemize}
+    \item \textbf{Adversarial Attacks:}
+    \begin{itemize}
+        \item PhSense: Defending Physically Realizable Attacks (CCS, 2024)
+        \item "Adversarial Attacks in Autonomous Systems" (IEEE, 2024)
+    \end{itemize}
+    \item \textbf{Defense Mechanisms:}
+    \begin{itemize}
+        \item Learning for Cyber-Physical System Security (various)
+        \item Control Barrier Functions for Safety (Alamir et al.)
+        \item Safe Reinforcement Learning papers
+    \end{itemize}
+\end{enumerate}
+
+\section{Risks and Mitigation}
+
+\begin{itemize}
+    \item \textbf{Live attacks hard to implement:} Use simulation (MuJoCo) first
+    \item \textbf{ESN detection not accurate:} Tune thresholds, add more training data
+    \item \textbf{Tariq unavailable:} Extend timeline, adjust experiment scope
+    \item \textbf{Paper rejection:} Co-author (Osemu) will revise and resubmit
+\end{itemize}
+
+\balance
+\end{document}

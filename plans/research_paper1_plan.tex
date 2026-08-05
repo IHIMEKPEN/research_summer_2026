@@ -1,0 +1,308 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{cite,graphicx,booktabs,tabularx,multirow,balance,todonotes}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+
+\begin{document}
+
+\title{Research Plan (Paper 1): Closing the Frequency Gap}
+
+\author{\IEEEauthorblockN{Osemudiamen Andrew Ihimekpen}
+    \IEEEauthorblockA{\textit{CREDIT Center, PVAMU} \\ oihimekpen@pvamu.edu}
+\and
+\IEEEauthorblockN{Tariq Abdul Quddoos}
+\IEEEauthorblockA{\textit{CREDIT Center, PVAMU} \\ tariq.abdulquddoos@pvamu.edu}}
+
+\maketitle
+
+\begin{abstract}
+Paper 1 targets ICRA 2027 (PaperPlaza deadline: 15 Sep 2026 PST):
+\emph{Closing the Frequency Gap: Real-Time Humanoid Control via Vision-Language-Action Models and Echo State Networks.}
+Primary author: Andrew. Co-author: Tariq.
+This revision (5 Aug 2026) sanity-checks measured progress, sharpens motivation, locks a 6-week path to submission, and adds an onboarding primer (symbols, metrics, plain-language insights).
+\end{abstract}
+
+%----------------------------------------------------------------------
+\section{Onboarding Primer (Read This First)}
+%----------------------------------------------------------------------
+\noindent
+This section is for collaborators joining mid-project. Skim it once; then the status numbers and equations will make sense.
+
+\subsection{The project in one paragraph}
+A Vision-Language-Action model (\textbf{VLA}, here Unitree \textbf{UnifoLM}) looks at the camera + a language goal and outputs desired joint angles for the Unitree \textbf{G1} humanoid (29 joints).
+That VLA is smart but slow ($\sim$1.7 updates per second).
+The robot needs smooth commands at \textbf{100\,Hz} (100 times per second).
+We insert an \textbf{Echo State Network (ESN)} between them: the VLA gives sparse targets; the ESN fills in smooth 100\,Hz joint commands.
+Baselines that must lose to us (or we have no paper): hold the last VLA output (\textbf{ZOH}) or linearly interpolate between VLA outputs.
+
+\subsection{Symbols and knobs (what $\alpha$, $\lambda$, \ldots mean)}
+\begin{center}
+\scriptsize
+\begin{tabularx}{\columnwidth}{@{}c p{0.22\columnwidth} X@{}}
+\toprule
+\textbf{Symbol} & \textbf{Name} & \textbf{Plain meaning} \\
+\midrule
+$\alpha$ & Leak rate & How fast the ESN forgets. Update mixes old state and new input: $(1{-}\alpha)\,$old $+\,\alpha\,$new. Our best: $\alpha{=}0.3$ (keep $\sim$70\% memory, take $\sim$30\% new). Smaller $\alpha$ $\Rightarrow$ longer memory / smoother; larger $\alpha$ $\Rightarrow$ more reactive. \\
+$\lambda$ & Ridge strength & Penalty on large readout weights when fitting $W_{\mathrm{out}}$. Our best: $\lambda{=}1$ (fairly strong; prefers stable fits). Tiny $\lambda$ overfits demos and can explode error. \\
+$N$ & Reservoir size & Number of hidden units (we use $N{=}1000$). Bigger $\Rightarrow$ more capacity and compute. \\
+$\rho$ & Spectral radius & Scales internal recurrence of $W_{\mathrm{res}}$ (we use $\rho{=}0.95$). Keeps the ``echo'' rich without blowing up. \\
+$u(t)\in\mathbb{R}^{58}$ & ESN input & $[q_t;\,q^\star_{\mathrm{VLA}}]$: current 29 joints + latest 29-D VLA target. \\
+$y(t)\in\mathbb{R}^{29}$ & ESN output & Next 100\,Hz joint command sent toward the robot / sim. \\
+$x(t)$ & Reservoir state & Internal $N$-D memory; not trained by backprop. \\
+$W_{\mathrm{out}}$ & Readout & Only trained part (ridge regression). Reservoir weights stay frozen. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent\textbf{Core ESN update} (leaky reservoir):
+\begin{align}
+x(t)&=(1-\alpha)x(t-1)+\alpha\,\tanh\!\big(W_{\mathrm{res}}x(t-1)+W_{\mathrm{in}}u(t)\big), \nonumber\\
+y(t)&=W_{\mathrm{out}}[x(t);u(t)]. \nonumber
+\end{align}
+
+\subsection{Metrics you will see in logs}
+\begin{itemize}
+    \item \textbf{Latency (ms) / Hz:} How long one VLA inference takes; Hz $= 1000/$ms. Gap vs.\ 100\,Hz $\approx 100/$Hz (e.g., 1.745\,Hz $\Rightarrow \sim$57$\times$ too slow).
+    \item \textbf{RMSE (rad):} Average joint-angle error. $9.83\times10^{-4}$\,rad $\approx 0.056^\circ$---very tight offline tracking.
+    \item \textbf{Jerk / jerk ratio:} Smoothness (derivative of acceleration). Ratio $\approx$0.981 means predicted motion is nearly as smooth as the demo (1.0 = matched).
+    \item \textbf{P99 / steady max (ms):} Tail control-step time. Budget is 10\,ms for 100\,Hz; we are under that when VLA is mocked.
+    \item \textbf{Mock VLA vs.\ live UnifoLM:} Mock = fake fast tokens (timing test only). Live = real model (needed for the paper claim).
+    \item \textbf{Oracle / kinematic replay:} Drive the ESN with recorded demo signals in MuJoCo---tests bridge fidelity, \emph{not} closed-loop policy success.
+\end{itemize}
+
+\subsection{Acronym cheat sheet}
+\textbf{VLA} vision-language-action model; \textbf{ESN} echo state network (reservoir computer); \textbf{ZOH} zero-order hold; \textbf{S2R} sim-to-real; \textbf{DIRT} domain / discrepancy transfer tooling in our stack; \textbf{GIL} Python global interpreter lock (we bypass it with multiprocessing); \textbf{DoF} degrees of freedom (G1: 29); \textbf{MuJoCo} physics simulator.
+
+\subsection{Plain-language insights (current ``Solid'' evidence)}
+\begin{enumerate}
+    \item \textbf{Frequency gap is real.} Live UnifoLM on our DGX is $\sim$573\,ms per action ($\sim$1.7\,Hz). Two profilers agree; nothing failed to parse. The robot wants 100\,Hz---so naive hold looks like a staircase of joint targets.
+    \item \textbf{ESN can track offline.} With $\alpha{=}0.3$, $\lambda{=}1$, a frozen reservoir reproduces 100\,Hz joints from sparse VLA holds almost as well as the demo (tiny RMSE, jerk matched). The \emph{bridge idea works on recorded data}.
+    \item \textbf{The controller is fast enough.} With a fake VLA, MuJoCo$+$ESN runs at $\sim$248\,Hz. The ESN loop is not the bottleneck; the slow VLA is.
+    \item \textbf{S2R code exists, results do not yet.} Deploy configs and ablation YAMLs are real; measured hardware transfer metrics are still future work.
+    \item \textbf{What this does \emph{not} prove.} We have not yet shown that live UnifoLM $\to$ ESN beats ZOH/linear on wipe success. That comparative closed-loop study is the remaining core of the paper.
+\end{enumerate}
+
+%----------------------------------------------------------------------
+\section{Sanity Check: What Is Actually Done}
+%----------------------------------------------------------------------
+\noindent
+Source of truth: measured artifacts under \texttt{research/results/} and the draft in \texttt{papers/icra2027/main.tex} (status date on manuscript: 30 Jul 2026).
+Today: \textbf{5 Aug 2026} $\Rightarrow$ \textbf{$\sim$6 weeks} to deadline---not a 12-week runway.
+
+\subsection{Solid (publishable as supporting evidence)}
+\begin{itemize}
+    \item \textbf{Frequency gap (live UnifoLM, not mock).}
+        PyTorch $n{=}100$ on \texttt{G1\_Clean\_Table}: mean \textbf{573.2\,ms} / \textbf{1.745\,Hz} (gap $57.3\times$ vs.\ 100\,Hz); Nsight NVTX mean \textbf{593.7\,ms} / \textbf{1.684\,Hz}.
+        Dual instruments agree; parse failure rate 0\%. This is the strongest empirical claim so far.
+    \item \textbf{CUDA ESN + ridge readout (offline).}
+        Sweep on wipe ep.~0 selects $(\alpha,\lambda)=(0.3,1)$: joint RMSE \textbf{$9.83\times10^{-4}$\,rad}, jerk ratio $\approx$0.981 vs.\ demo.
+        Training cheap ($\sim$2.9\,kHz). Claim: \emph{a frozen reservoir can track 100\,Hz joints from sparse VLA holds}.
+    \item \textbf{Control timing headroom (mock VLA).}
+        GIL-free dual-process MuJoCo$+$ESN sustains \textbf{248\,Hz} mean (P99 5.42\,ms; steady max 6.82\,ms $<$10\,ms).
+        Claim: \emph{the bridge clears the 100\,Hz budget when VLA is not the bottleneck}.
+    \item \textbf{S2R scaffolding.}
+        Deploy package, ablation YAMLs (ZOH / raw / ESN), G1 29-DoF defaults exist. Not yet a result---but the transfer path is real code, not vapor.
+\end{itemize}
+
+\subsection{Overclaimed or Misframed in Prior Plan}
+\begin{itemize}
+    \item \textbf{``MuJoCo eval complete / 17\% grasp'' is wrong.}
+        The measured run is \emph{kinematic oracle replay} (dataset proprio + held VLA tokens through the trained ESN), not live UnifoLM closed-loop.
+        \texttt{grasp\_success=true} on \emph{one} episode; 1047/6000 frames attached $\approx$17\% of \emph{frames}, not a 17\% success rate.
+        Joint RMSE $1.37\times10^{-3}$\,rad is tight; right-EE RMSE $\sim$9.6\,cm and table-contact 0.38\% show geometric wipe quality is still weak.
+    \item \textbf{``Dual-process complete'' $\neq$ closed-loop complete.}
+        Report flag: \texttt{mock\_vla: true}. Timing is done; policy evidence is not.
+    \item \textbf{Ablations / baselines / paper figures marked ready elsewhere are empty.}
+        \texttt{results/step1\_baselines}, \texttt{step3\_ablation}, \texttt{step3\_evaluation}, \texttt{step4\_paper\_*} are README placeholders only.
+        Code and configs exist; comparative tables do not.
+    \item \textbf{Page budget.}
+        ICRA contributed papers: \textbf{6 pages + 1 optional refs page}, not 8-page freestyle.
+    \item \textbf{Timeline inconsistency.}
+        Prior plan mixed a 12-week calendar with a Sep~15 submit week ending in October. Impossible. Rewrite below is deadline-aligned.
+\end{itemize}
+
+\subsection{Honest Status Table}
+\begin{table}[h]
+\centering
+\caption{Milestone audit (5 Aug 2026). Green = measured artifact; amber = code/config only; red = missing for submission.}
+\label{tab:audit}
+\scriptsize
+\begin{tabularx}{\columnwidth}{@{}p{0.42\columnwidth} l X@{}}
+\toprule
+\textbf{Milestone} & \textbf{Status} & \textbf{Supports} \\
+\midrule
+UnifoLM latency (PyTorch+Nsight) & \textcolor{green}{Done} & Frequency-gap claim \\
+ESN ridge train + $\alpha$$\times$$\lambda$ sweep & \textcolor{green}{Done} & Offline tracking claim \\
+Dual-process @$>$100\,Hz (mock VLA) & \textcolor{green}{Done} & Timing / systems claim \\
+MuJoCo wipe oracle (1 ep., kinematic) & \textcolor{green}{Done*} & Bridge fidelity, not policy \\
+Live UnifoLM closed-loop wipe & \textcolor{red}{Missing} & \textbf{Core paper claim} \\
+Baselines: ZOH / linear / ESN & \textcolor{orange}{Code only} & Comparative tables \\
+$N$/$\rho$ ESN ablations (closed-loop) & \textcolor{orange}{Partial} & Offline only; need trials \\
+S2R/DIRT transfer metrics on G1 & \textcolor{orange}{Scaffold} & Sim-to-real paragraph \\
+Paper figures + baseline tables & \textcolor{red}{Empty} & Camera-ready results \\
+IEEE draft skeleton & \textcolor{orange}{Draft} & Needs live numbers \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent\textbf{Bottom line:} We have a credible \emph{systems + offline dynamics} story.
+We do \textbf{not} yet have the \emph{control} result that ICRA reviewers will demand: live UnifoLM $\to$ ESN $\to$ task success vs.\ ZOH/linear on the same protocol.
+
+%----------------------------------------------------------------------
+\section{Improved Motivation}
+%----------------------------------------------------------------------
+
+\subsection{Problem (reframed)}
+Foundation VLAs (OpenVLA, $\pi_0$, UnifoLM-VLA) make open-vocabulary manipulation plausible on humanoids, but they are \emph{slow policies in a fast plant}.
+On our hardware, UnifoLM-VLA-Base updates joint intents at $\sim$1.7\,Hz while the Unitree G1 Edu expects 100\,Hz commands over 29\,DoF.
+Under naive zero-order hold, each VLA token is held for $\sim$57 control ticks: the robot sees a staircase of targets, not a trajectory.
+That mismatch is not a minor engineering annoyance---it is a structural incompatibility between foundation-model inference and embodied control rates.
+
+\subsection{Why this is a research question (not just a filter)}
+\begin{enumerate}
+    \item \textbf{Rate mismatch is first-class.}
+        Speeding up the VLA (quantization, distillation, smaller heads) shrinks the gap but does not remove the need for a continuous dynamical interface while the next token is computing.
+        We treat the bridge as a scientific object: what temporal structure must sit between sparse language-conditioned intents and dense joint actuation?
+    \item \textbf{Simple upsamplers are inadequate hypotheses.}
+        ZOH preserves discontinuities; linear interpolation ignores plant dynamics and contact.
+        Both are necessary baselines. If ESN fails to beat them on success and jerk under live VLA, the hybrid claim collapses---and that falsifiability is a feature.
+    \item \textbf{Why ESN specifically.}
+        Reservoir computing gives (a)~millisecond forward passes with no BPTT, (b)~a frozen nonlinear memory matched to continuous-time motor streams, and (c)~a one-shot ridge readout that can be retuned from short demos.
+        Unlike replacing the VLA with a faster policy, we keep language grounding and add a reflexive temporal layer.
+        Unlike CPGs, the drive is language- and vision-conditioned, not purely rhythmic.
+\end{enumerate}
+
+\subsection{Core claim (one sentence)}
+A leaky Echo State Network, driven by concatenated proprioception and sparse VLA joint targets $u(t)=[q_t;\,q^\star_{\mathrm{VLA}}]\in\mathbb{R}^{58}$, can close the measured $\sim$57--59$\times$ frequency gap and improve task success and motion smoothness over ZOH and linear upsampling on G1 wipe/clean tasks---without retraining the VLA.
+
+\subsection{Architecture (unchanged; clarified role)}
+\begin{center}
+Camera $\to$ UnifoLM-VLA ($\sim$1.7\,Hz measured) $\to$ \textcolor{blue}{ESN bridge} (100\,Hz) $\to$ G1 joints (29\,DoF)
+\end{center}
+\begin{itemize}
+    \item \textbf{VLA:} open-vocabulary intents (slow, semantic).
+    \item \textbf{ESN:} temporal continuity and rate matching (fast, reflexive).
+    \item \textbf{Plant:} G1 Edu / MuJoCo stand-in until live closed-loop is green.
+\end{itemize}
+
+%----------------------------------------------------------------------
+\section{Research Trajectory (Evidence Ladder)}
+%----------------------------------------------------------------------
+\noindent
+Each rung answers a distinct reviewer question. Do not skip rungs; do not oversell lower rungs as higher ones.
+
+\begin{enumerate}
+    \item \textbf{Rung A --- Gap exists (DONE).}
+        Q: Is UnifoLM too slow for 100\,Hz G1 control?\\
+        A: Yes---573\,ms / 1.745\,Hz (PyTorch), 594\,ms / 1.684\,Hz (Nsight).
+    \item \textbf{Rung B --- Bridge can track offline (DONE).}
+        Q: Can a ridge ESN reproduce 100\,Hz joints from sparse holds?\\
+        A: Yes---$9.83\times10^{-4}$\,rad RMSE at $(\alpha,\lambda)=(0.3,1)$.
+    \item \textbf{Rung C --- Bridge is fast enough in-loop (DONE, mock).}
+        Q: Does the control process clear 10\,ms?\\
+        A: Yes---248\,Hz mean under mock VLA.
+    \item \textbf{Rung D --- Bridge preserves task geometry in sim (PARTIAL).}
+        Q: Does ESN replay yield grasp/wipe behavior in MuJoCo?\\
+        A: Joint tracking yes; wipe contact / EE accuracy still weak; \textbf{only oracle, 1 episode}.
+        Next: multi-episode oracle + live-VLA sim (no mock) before hardware.
+    \item \textbf{Rung E --- Live UnifoLM closed-loop beats baselines (CRITICAL / MISSING).}
+        Q: On the same wipe protocol, does VLA$+$ESN beat ZOH and linear on success, jerk, and latency?\\
+        A: TBD. This is the paper's make-or-break experiment.
+    \item \textbf{Rung F --- Ablations explain \emph{why} (MISSING TABLES).}
+        Sweep $N\in\{500,1000,2000\}$, $\rho\in\{0.85,0.95,1.05\}$, and $\alpha$ around 0.3; report RMSE, jerk, success.
+    \item \textbf{Rung G --- Transfer note (OPTIONAL IF TIME).}
+        S2R/DIRT metrics on G1 strengthen the systems story; if blocked, keep as limitation + deploy description (honest).
+\end{enumerate}
+
+\noindent\textbf{Paper narrative = Rungs A--C as setup, D as sanity, E--F as results.}
+Without E, the manuscript is a profiling + offline ESN note---not an ICRA control paper.
+
+%----------------------------------------------------------------------
+\section{Critical Path (6 Weeks to 15 Sep 2026)}
+%----------------------------------------------------------------------
+
+\subsection{Phase 1 --- Replace mock with live UnifoLM in sim (Week of Aug 5--14)}
+\textbf{Goal:} Same dual-process loop, \texttt{--mock} off; log success / Hz / p99 / jerk.
+\begin{itemize}
+    \item Run \texttt{step3\_dual\_thread\_mujoco} live; freeze episode protocol (wipe primary; clean/grasp secondary if time).
+    \item Implement/verify baselines on identical env: ZOH, linear interpolation, ESN (checkpoint already selected).
+    \item Deliverable: filled \texttt{results/step3\_*} JSON + first comparison table (even if $n$ is small).
+    \item Advisor checkpoint target: mid-August.
+\end{itemize}
+
+\subsection{Phase 2 --- Comparative study + ablations (Aug 15--31)}
+\textbf{Goal:} Rung E--F numbers that can enter Table~I / ablation table.
+\begin{itemize}
+    \item Trial budget (realistic for 2--3 weeks): \textbf{$\geq$20 trials/method} on wipe in sim (ZOH / linear / ESN); scale to 50 only if runtime allows.
+    \item Hardware G1 live trials: attempt in parallel via S2R; \textbf{do not block submission on full 150-trial hardware suite}.
+        Prefer fewer well-logged hardware episodes over an unfinished mega-protocol.
+    \item Ablations: $N$ and $\rho$ at fixed best $(\alpha,\lambda)$; optional $\alpha\in\{0.1,0.3,0.5\}$ confirmation under live VLA.
+    \item Metrics (fixed set): task success (binary), joint RMSE, right-EE RMSE, jerk, control Hz / p99 latency, contact ratio (wipe).
+\end{itemize}
+
+\subsection{Phase 3 --- Manuscript freeze (Sep 1--12)}
+\begin{itemize}
+    \item Fill measured tables; generate trajectory overlays and bar charts from logs (no placeholder figures).
+    \item Soften abstract/intro: every claim tagged DONE vs.\ TBD must match artifacts.
+    \item Length discipline: 6 pages body + optional refs page; video $\leq$180\,s.
+    \item Tariq: technical review (methods, equations, result consistency) within 3 days of draft freeze.
+\end{itemize}
+
+\subsection{Phase 4 --- Submit (Sep 13--15)}
+Font-embedded PDF; PaperPlaza upload $\geq$48\,h before deadline; backup venue list ready if travel/presentation constraints force a pivot.
+
+\subsection{Week-by-Week Owners}
+{\scriptsize
+\begin{tabularx}{\columnwidth}{@{}l X l p{0.28\columnwidth}@{}}
+\toprule
+\textbf{Window} & \textbf{Focus} & \textbf{Owner} & \textbf{Exit criterion} \\
+\midrule
+Aug 5--14 & Live UnifoLM sim + baselines & Andrew lead & Non-mock step3 + 3-way table \\
+Aug 15--22 & Trial campaign (sim) & Both & $\geq$20 trials $\times$ 3 methods \\
+Aug 23--31 & Ablations + optional G1 & Tariq lead & Ablation CSV + hardware logs \\
+Sep 1--7 & Figures + Results rewrite & Andrew & Plots in \texttt{papers/} \\
+Sep 8--12 & Full draft + review & Both & Reviewed 6+1 PDF \\
+Sep 13--15 & Submit & Both & PaperPlaza confirmation \\
+\bottomrule
+\end{tabularx}
+}
+
+%----------------------------------------------------------------------
+\section{Collaboration Split (Unchanged Intent, Clearer Scope)}
+%----------------------------------------------------------------------
+\begin{itemize}
+    \item \textbf{Andrew:} architecture, protocol design, UnifoLM/S2R integration, writing, figures narrative, submission.
+    \item \textbf{Tariq:} baseline/ablation execution, trial logging, plot generation from logs, methods accuracy review.
+    \item \textbf{Non-goals for Tariq this cycle:} redesigning the VLA, rewriting the paper from scratch, inventing new architectures.
+\end{itemize}
+
+%----------------------------------------------------------------------
+\section{Risks (Reframed Around the Critical Claim)}
+%----------------------------------------------------------------------
+\begin{itemize}
+    \item \textbf{Live UnifoLM closed-loop fails to beat ZOH.}
+        Mitigation: report negative result honestly with profiling + offline ESN as systems contribution; strengthen ablations; consider shorter-horizon wipe subtasks.
+        Do not hide behind mock numbers.
+    \item \textbf{Hardware access slips.}
+        Mitigation: primary results = live-VLA MuJoCo; G1 = best-effort transfer note (Rung G optional).
+    \item \textbf{Scope creep (3 tasks $\times$ 50 trials $\times$ all ablations).}
+        Mitigation: wipe-only primary; clean/grasp as appendix or future work; 20-trial floor before 50-trial stretch.
+    \item \textbf{ICRA on-site presentation constraint.}
+        Mitigation: co-author travel plan + backup venues already listed in the umbrella 2026 plan.
+\end{itemize}
+
+%----------------------------------------------------------------------
+\section{Immediate Next Actions (This Week — Sim)}
+%----------------------------------------------------------------------
+\begin{enumerate}
+    \item Offline baselines (no live VLA needed):
+          \texttt{python3 -m src.step3\_control\_baselines --all --episode 0}
+    \item Live UnifoLM dual-process (omit \texttt{--mock}):
+          \texttt{--bridge esn}, then \texttt{zoh}, then \texttt{linear}
+          (\texttt{python3 -m src.step3\_dual\_thread\_mujoco --bridge esn --duration\_s 10}).
+    \item Or one-shot: \texttt{python3 -m src.step3\_sim\_comparison --episode 0 --duration\_s 10}
+    \item Next week: same bridges on Jetson AGX Thor $\to$ G1 via \texttt{s2r} (do not block sim on hardware).
+\end{enumerate}
+
+\balance
+\end{document}

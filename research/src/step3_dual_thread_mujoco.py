@@ -17,8 +17,13 @@ For dataset-oracle replay, benchmark video, and cloth grasp visuals see Step 4:
   python3 -m src.step4_mujoco_evaluation
 
 Usage (from research/):
-  python3 -m src.step3_dual_thread_mujoco --mock --duration_s 5
-  python3 -m src.step3_dual_thread_mujoco --duration_s 10 --record_video
+  # Live UnifoLM (default) — required for timing / closed-loop claims
+  python3 -m src.step3_dual_thread_mujoco --duration_s 10 --bridge esn
+  python3 -m src.step3_dual_thread_mujoco --duration_s 10 --bridge zoh
+  python3 -m src.step3_dual_thread_mujoco --duration_s 10 --bridge linear
+
+  # Mock VLA — timing smoke test only (not a paper result)
+  python3 -m src.step3_dual_thread_mujoco --mock --duration_s 5 --bridge esn
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ import time
 from ctypes import c_float, c_int, c_uint8
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -50,6 +55,7 @@ from src.step2_esn_cuda_ridge import (
     DATASET_ID,
     load_checkpoint,
 )
+from src.step3_control_baselines import online_linear_command
 from src.vla_ee_bridge import (
     EE_STATE_DIM,
     build_wipe_table_model,
@@ -58,6 +64,8 @@ from src.vla_ee_bridge import (
     load_wipe_table_init_joints,
     resolve_robot_mjcf,
 )
+
+BridgeMode = Literal["esn", "zoh", "linear"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -596,6 +604,7 @@ class ControlLoopStats:
     p99_step_ms: float = 0.0
     video_path: Optional[str] = None
     gil_bypass_ok: bool = False
+    bridge: str = "esn"
 
 
 def _warmup_esn_reservoir(
@@ -659,9 +668,15 @@ def _mujoco_control_worker(
     image_shape: Tuple[int, int, int],
     init_episode: int = 0,
     use_wipe_table_scene: bool = True,
+    bridge: str = "esn",
+    vla_hz: float = DEFAULT_VLA_HZ,
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    stats = ControlLoopStats()
+    if bridge not in ("esn", "zoh", "linear"):
+        result_queue.put(RuntimeError(f"Unknown bridge mode: {bridge}"))
+        return
+
+    stats = ControlLoopStats(bridge=bridge)
     step_times: list[float] = []
     video_frames: List[np.ndarray] = []
 
@@ -679,16 +694,24 @@ def _mujoco_control_worker(
         init_joints_29d=init_joints,
         wipe_table_scene=wipe_scene,
     )
-    esn = load_checkpoint(esn_checkpoint, device=device)
-    esn.eval()
+    esn = None
+    if bridge == "esn":
+        esn = load_checkpoint(esn_checkpoint, device=device)
+        esn.eval()
 
     init_joints = env.get_joint_positions()
     write_vla_token(registers, init_joints)
 
     dt = 1.0 / control_hz
+    hold_ticks = max(1, int(round(control_hz / max(vla_hz, 1e-6))))
     joint_gpu = torch.zeros(G1_DOF, device=device, dtype=torch.float32)
     vla_gpu = torch.zeros(G1_DOF, device=device, dtype=torch.float32)
     use_nvtx = device.type == "cuda" and hasattr(torch.cuda, "nvtx")
+
+    prev_token = init_joints.astype(np.float32).copy()
+    curr_token = init_joints.astype(np.float32).copy()
+    last_seq = 0
+    ticks_since_update = 0
 
     def _publish_observation() -> Tuple[np.ndarray, np.ndarray]:
         image = env.render_rgb()
@@ -709,7 +732,11 @@ def _mujoco_control_worker(
             time.sleep(dt)
 
     if registers.vla_ready.value:
-        logger.info("VLA ready — starting %.1fs timed control loop.", duration_s)
+        logger.info(
+            "VLA ready — starting %.1fs timed control loop (bridge=%s).",
+            duration_s,
+            bridge,
+        )
     else:
         logger.warning(
             "VLA not ready after %.0fs — running with seeded token only.",
@@ -731,27 +758,44 @@ def _mujoco_control_worker(
     t_end = time.perf_counter() + duration_s
     next_tick = time.perf_counter()
 
-    logger.info("MuJoCo control process started @ %.0f Hz", control_hz)
+    logger.info("MuJoCo control process started @ %.0f Hz (bridge=%s)", control_hz, bridge)
     try:
         while time.perf_counter() < t_end and not registers.stop.is_set():
             tick_start = time.perf_counter()
 
             if use_nvtx:
-                torch.cuda.nvtx.range_push("ESN_Control_Process")
+                torch.cuda.nvtx.range_push("Control_Process")
 
             _, joint_pos = _publish_observation()
 
-            vla_token, _ = read_vla_token(registers)
-            joint_gpu.copy_(
-                torch.from_numpy(joint_pos).to(device=device, dtype=torch.float32)
-            )
-            vla_gpu.copy_(
-                torch.from_numpy(vla_token).to(device=device, dtype=torch.float32)
-            )
+            vla_token, seq = read_vla_token(registers)
+            if seq != last_seq:
+                prev_token = curr_token.copy()
+                curr_token = np.asarray(vla_token, dtype=np.float32).reshape(G1_DOF).copy()
+                last_seq = int(seq)
+                ticks_since_update = 0
+            else:
+                ticks_since_update += 1
 
-            esn.update_vla_target(vla_gpu)
-            cmd_gpu = esn.step_proprio(joint_gpu)
-            cmd_np = cmd_gpu.detach().cpu().numpy()
+            if bridge == "esn":
+                assert esn is not None
+                joint_gpu.copy_(
+                    torch.from_numpy(joint_pos).to(device=device, dtype=torch.float32)
+                )
+                vla_gpu.copy_(
+                    torch.from_numpy(curr_token).to(device=device, dtype=torch.float32)
+                )
+                esn.update_vla_target(vla_gpu)
+                cmd_np = esn.step_proprio(joint_gpu).detach().cpu().numpy()
+            elif bridge == "zoh":
+                cmd_np = curr_token
+            else:  # linear
+                cmd_np = online_linear_command(
+                    prev_token=prev_token,
+                    curr_token=curr_token,
+                    ticks_since_update=ticks_since_update,
+                    hold_ticks=hold_ticks,
+                )
 
             env.apply_unified_control(cmd_np)
             env.step_physics()
@@ -803,6 +847,7 @@ def _mujoco_control_worker(
         stats.video_path = str(out_path)
 
     result_queue.put(stats)
+
 
 
 def run_esn_physics_loop(
@@ -898,6 +943,7 @@ class DualProcessConfig:
     unnorm_key: str = DEFAULT_UNNORM_KEY
     init_episode: int = 0
     use_wipe_table_scene: bool = True
+    bridge: BridgeMode = "esn"
 
 
 class DualProcessController:
@@ -921,7 +967,9 @@ class DualProcessController:
         ctx = mp.get_context("spawn")
         result_queue: mp.Queue = ctx.Queue()
         image_shape = (*VLA_IMAGE_SIZE, 3)
-        video_path = cfg.video_path or (RESULTS_DIR / "table_wipe_benchmark.mp4")
+        video_path = cfg.video_path or (
+            RESULTS_DIR / f"table_wipe_{cfg.bridge}_{'mock' if cfg.mock else 'live'}.mp4"
+        )
         video_path.parent.mkdir(parents=True, exist_ok=True)
 
         if cfg.use_wipe_table_scene:
@@ -967,14 +1015,19 @@ class DualProcessController:
                 "image_shape": image_shape,
                 "init_episode": cfg.init_episode,
                 "use_wipe_table_scene": cfg.use_wipe_table_scene,
+                "bridge": cfg.bridge,
+                "vla_hz": cfg.vla_hz,
             },
             daemon=False,
         )
 
         logger.info(
-            "Starting dual-process control | control=%.0f Hz | VLA=%.1f Hz | duration=%.1fs",
+            "Starting dual-process control | bridge=%s | control=%.0f Hz | VLA=%.1f Hz | "
+            "mock=%s | duration=%.1fs",
+            cfg.bridge,
             cfg.control_hz,
             cfg.vla_hz,
+            cfg.mock,
             cfg.duration_s,
         )
         self._vla_process.start()
@@ -1013,11 +1066,16 @@ def print_run_summary(
     vla_hz: float,
     report_path: Path,
     profile: bool,
+    bridge: str = "esn",
+    mock: bool = False,
 ) -> None:
     gil_status = "RESOLVED" if stats.gil_bypass_ok else "NOT RESOLVED"
+    vla_mode = "mock" if mock else "live UnifoLM"
     print("\n" + "=" * 60)
     print("  Phase 3 — Dual-Process MuJoCo Control (GIL-Free)")
     print("=" * 60)
+    print(f"  Bridge mode      : {bridge}")
+    print(f"  VLA mode         : {vla_mode}")
     print(f"  Physics steps     : {stats.steps:,}")
     print(f"  Mean step latency : {stats.mean_step_ms:.3f} ms  ({stats.esn_hz:.1f} Hz)")
     print(f"  Max step latency  : {stats.max_step_ms:.3f} ms  (steady-state: {stats.max_step_ms_steady:.3f} ms)")
@@ -1047,10 +1105,20 @@ def print_run_summary(
 # ── Main ──────────────────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Phase 3 dual-process MuJoCo control (VLA + ESN, GIL-free)",
+        description="Phase 3 dual-process MuJoCo control (VLA + bridge, GIL-free)",
     )
     parser.add_argument("--mjcf", type=str, default=None, help="Path to G1 MJCF XML")
-    parser.add_argument("--mock", action="store_true", help="Mock VLA inference (no model download)")
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Mock VLA inference (timing smoke test only; omit for live UnifoLM)",
+    )
+    parser.add_argument(
+        "--bridge",
+        choices=["esn", "zoh", "linear"],
+        default="esn",
+        help="100 Hz bridge: esn (ours), zoh, or linear",
+    )
     parser.add_argument("--record_video", action="store_true", help="Export benchmark MP4 (see Step 4 for full eval)")
     parser.add_argument("--episode", type=int, default=0, help="Dataset episode for init pose seeding")
     parser.add_argument("--duration_s", type=float, default=MAX_DURATION_S,
@@ -1071,23 +1139,29 @@ def main() -> None:
     args = parser.parse_args()
 
     mjcf_path = resolve_mjcf_path(args.mjcf)
-    esn_ckpt = resolve_esn_checkpoint(args.esn_checkpoint)
     if args.duration_s > MAX_DURATION_S:
         raise ValueError(f"--duration_s must be <= {MAX_DURATION_S}")
 
+    esn_ckpt = Path(args.esn_checkpoint)
+    esn_meta: Dict[str, Any] = {}
     logger.info("MJCF: %s", mjcf_path)
-    logger.info("ESN checkpoint (Step 2): %s", esn_ckpt)
-    esn_meta = load_esn_checkpoint_metadata(esn_ckpt)
-    if esn_meta.get("metrics"):
-        m = esn_meta["metrics"]
-        logger.info(
-            "  Step 2 metrics: MSE=%.2e jerk=%.2e α=%.2f λ=%.1e dataset=%s",
-            m.get("mse", float("nan")),
-            m.get("jerk", float("nan")),
-            m.get("leaky_rate", float("nan")),
-            m.get("ridge_alpha", float("nan")),
-            esn_meta.get("dataset_id", DATASET_ID),
-        )
+    logger.info("Bridge: %s | VLA: %s", args.bridge, "mock" if args.mock else "live UnifoLM")
+    if args.bridge == "esn":
+        esn_ckpt = resolve_esn_checkpoint(args.esn_checkpoint)
+        logger.info("ESN checkpoint (Step 2): %s", esn_ckpt)
+        esn_meta = load_esn_checkpoint_metadata(esn_ckpt)
+        if esn_meta.get("metrics"):
+            m = esn_meta["metrics"]
+            logger.info(
+                "  Step 2 metrics: MSE=%.2e jerk=%.2e α=%.2f λ=%.1e dataset=%s",
+                m.get("mse", float("nan")),
+                m.get("jerk", float("nan")),
+                m.get("leaky_rate", float("nan")),
+                m.get("ridge_alpha", float("nan")),
+                esn_meta.get("dataset_id", DATASET_ID),
+            )
+    else:
+        logger.info("Bridge=%s — ESN checkpoint not required.", args.bridge)
     if torch.cuda.is_available():
         logger.info("Device: %s (%s)", args.device, torch.cuda.get_device_name(torch.device(args.device)))
 
@@ -1105,28 +1179,33 @@ def main() -> None:
         record_video=args.record_video and not args.no_video,
         video_fps=args.video_fps,
         init_episode=args.episode,
+        bridge=args.bridge,
     )
     controller = DualProcessController(config)
     stats = controller.run()
 
+    vla_tag = "mock" if config.mock else "live"
     report: Dict[str, Any] = {
         "architecture": "multiprocessing",
+        "task": "g1_wipe_table",
+        "bridge": config.bridge,
         "mjcf": str(mjcf_path),
         "control_hz_target": args.control_hz,
         "vla_hz_target": args.vla_hz,
         "duration_s": args.duration_s,
         "mock_vla": config.mock,
         "init_episode": config.init_episode,
-        "esn_checkpoint": str(esn_ckpt),
-        "esn_dataset_id": esn_meta.get("dataset_id", DATASET_ID),
-        "esn_step2_mse": esn_meta.get("metrics", {}).get("mse"),
-        "esn_step2_jerk": esn_meta.get("metrics", {}).get("jerk"),
+        "esn_checkpoint": str(esn_ckpt) if config.bridge == "esn" else None,
+        "esn_dataset_id": esn_meta.get("dataset_id", DATASET_ID) if config.bridge == "esn" else None,
+        "esn_step2_mse": esn_meta.get("metrics", {}).get("mse") if config.bridge == "esn" else None,
+        "esn_step2_jerk": esn_meta.get("metrics", {}).get("jerk") if config.bridge == "esn" else None,
         "steps": stats.steps,
         "mean_step_ms": stats.mean_step_ms,
         "max_step_ms": stats.max_step_ms,
         "max_step_ms_steady": stats.max_step_ms_steady,
         "p99_step_ms": stats.p99_step_ms,
-        "achieved_esn_hz": stats.esn_hz,
+        "achieved_control_hz": stats.esn_hz,
+        "achieved_esn_hz": stats.esn_hz if config.bridge == "esn" else None,
         "vla_ticks": stats.vla_ticks,
         "vla_register_sequence": stats.vla_seq_final,
         "gil_bypass_ok": stats.gil_bypass_ok,
@@ -1134,10 +1213,16 @@ def main() -> None:
         "video_path": stats.video_path,
         "device": args.device,
     }
-    report_path = RESULTS_DIR / "dual_thread_report.json"
+    report_name = f"dual_thread_report_{config.bridge}_{vla_tag}.json"
+    report_path = RESULTS_DIR / report_name
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
+    # Keep legacy filename pointing at the latest ESN live/mock run for notebooks.
+    if config.bridge == "esn":
+        legacy = RESULTS_DIR / "dual_thread_report.json"
+        with open(legacy, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
 
     print_run_summary(
         stats,
@@ -1145,9 +1230,18 @@ def main() -> None:
         vla_hz=args.vla_hz,
         report_path=report_path,
         profile=args.profile,
+        bridge=config.bridge,
+        mock=config.mock,
     )
-    print("  Nsight Systems: nsys profile --trace=cuda,nvtx,osrt \\")
-    print(f"    python3 -m src.step3_dual_thread_mujoco --mock --profile --duration_s 5")
+    print("  Live UnifoLM (paper timing):")
+    print("    python3 -m src.step3_dual_thread_mujoco --bridge esn --duration_s 10")
+    print("  Baselines in the same loop:")
+    print("    python3 -m src.step3_dual_thread_mujoco --bridge zoh --duration_s 10")
+    print("    python3 -m src.step3_dual_thread_mujoco --bridge linear --duration_s 10")
+    print("  Offline ZOH/linear table (no GPU VLA needed):")
+    print("    python3 -m src.step3_control_baselines --all --episode 0")
+    print("  Or run all sim comparisons via:")
+    print("    python3 -m src.step3_sim_comparison --episode 0 --duration_s 10")
 
 
 if __name__ == "__main__":

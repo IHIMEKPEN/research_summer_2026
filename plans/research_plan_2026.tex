@@ -1,0 +1,144 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{cite,graphicx,booktabs,tabularx,multirow,balance,placeins,todonotes}
+\usepackage{xcolor}
+
+\begin{document}
+
+\title{Three-Month Research Plan for ICRA 2027 Publications}
+
+\author{\IEEEauthorblockN{Osemudiamen Andrew Ihimekpen}
+\IEEEauthorblockA{\textit{CREDIT Center, PVAMU} \\ oihimekpen@pvamu.edu}
+\and
+\IEEEauthorblockN{Tariq Abdul Quddoos}
+\IEEEauthorblockA{\textit{CREDIT Center, PVAMU} \\ tariq.abdulquddoos@pvamu.edu}}
+
+\maketitle
+
+\begin{abstract}
+This 3-month plan targets dual publications: Paper 1 on VLA+ESN for real-time humanoid control (ICRA 2027), and Paper 2 on robotics security (RA-L 2026 or NeurIPS 2025). Both tracks include detailed timelines, deliverables, and risk mitigation.
+\end{abstract}
+
+\section{Executive Summary}
+\begin{itemize}
+    \item \textbf{Track A (Primary):} ICRA 2027 - Paper 1 (Sep 2026 submission), requires on-site attendance (May 2027, Seoul)
+    \item \textbf{Track B (Backup):} NeurIPS 2025 - Paper 1 (Sep 2025 submission), online presentation OK
+    \item \textbf{Track C (Backup):} ICML 2025 - Paper 1 (Aug 2025 submission), online presentation OK
+    \item \textbf{Primary author:} Andrew. \textbf{Co-author:} Tariq Abdul Quddoos (PVAMU)
+\end{itemize}
+
+\section{Paper 1: Closing the Frequency Gap}
+\noindent\emph{Detail plan:} \texttt{research\_paper1\_plan.tex} (revised 5 Aug 2026). Summary only below.
+
+\subsection{Sanity Check (Measured vs.\ Missing)}
+\begin{itemize}
+    \item \textbf{Done:} UnifoLM gap 573.2\,ms / 1.745\,Hz (PyTorch) and 593.7\,ms (Nsight); ESN ridge $9.83\times10^{-4}$\,rad; dual-process 248\,Hz under \emph{mock} VLA; MuJoCo \emph{oracle} joint RMSE $1.37\times10^{-3}$\,rad (not a 17\% success rate).
+    \item \textbf{Missing (submission-critical):} live UnifoLM closed-loop vs.\ ZOH/linear; filled ablation/baseline tables; camera-ready figures.
+    \item \textbf{Runway:} $\sim$6 weeks to 15 Sep 2026---not a 12-week plan.
+\end{itemize}
+
+\subsection{Motivation (one line)}
+Keep language-conditioned VLA intents; add a frozen ESN as the dynamical interface that closes the measured $\sim$57--59$\times$ rate gap and must beat ZOH/linear on success and jerk.
+
+\subsection{Critical Path (6 Weeks)}
+\begin{enumerate}
+    \item Aug 5--14: live UnifoLM in sim (no mock) + ZOH/linear/ESN baselines
+    \item Aug 15--31: comparative trials ($\geq$20/method wipe) + $N$/$\rho$ ablations; G1 best-effort
+    \item Sep 1--12: figures + 6+1 page draft + Tariq review
+    \item Sep 13--15: PaperPlaza submit
+\end{enumerate}
+
+\subsection{Required Citations (Top)}
+\begin{enumerate}
+    \item OpenVLA (arXiv:2503.08703, 2025)
+    \item UnifoLM-VLA (Unitree, 2026)
+    \item $\pi_0$ / flow-matching VLA preprints (2026)
+    \item Jaeger echo-state hypothesis (2001)
+    \item Unitree G1 Edu; MuJoCo
+\end{enumerate}
+
+\section{Paper 2: Robotics Security}
+
+\subsection{Concept}
+ESN-based anomaly detection between VLA outputs and G1 actuators. Detects adversarial perturbations before physical harm.
+
+\subsection{Threat Model (G1 Edu)}
+\begin{itemize}
+    \item Perception: Camera spoofing, adversarial patches
+    \item Network: FMX DDS sniffing
+    \item AI: Prompt injection, jailbreaks
+    \item Physical: Joint torque injection
+\end{itemize}
+
+\subsection{Recommend\{ed\} Venues}
+\begin{itemize}
+    \item \textbf{Primary:} \textbf{IEEE RA-L 2026} (Jun 2026, no on-site) - fits robotics+security
+    \item \textbf{Secondary:} \textbf{RSS 2026} (Oct 2026, no on-site) - excellent robotics venue
+    \item \textbf{Alternative:} \textbf{ACM/IEEE CSS 2027} (Mar 2027, no on-site) - security focus
+\end{itemize}
+
+\subsection{10-Week Timeline (Paper 2)}
+\begin{tabular}{lll}
+\textbf{Week} & \textbf{Task} & \textbf{Owner} \\
+1-2 & Lit review & Osemu \\
+3 & Threat model & Both \\
+4-6 & Experiments (attacks + ESN defense) & Tariq (lead) \\
+7-8 & Draft & Osemu \\
+9 & Review & Both \\
+10 & \textbf{Submit} & Both \\
+\end{tabular}
+
+\section{Collaboration with Tariq Abdul Quddoos}
+
+\begin{itemize}
+    \item \textbf{Paper 1:} Andrew (primary), Tariq (co-author)
+    \begin{itemize}
+        \item Andrew: Architecture, experiment design, writing
+        \item Tariq: Code implementation, experiment execution, validation
+    \end{itemize}
+    \item \textbf{Paper 2:} Both 50-50 or You 60-40 (depending on his interest)
+    \item \textbf{Compensation:} PVAMU CREDIT Center covers costs
+    \item \textbf{Ethical:} Tariq will actively participate; no fabrication
+\end{itemize}
+
+\subsection{Contact Tariq (this week)}
+\begin{verbatim}
+Subject: Invitation to Co-Author Robotics Research (ICRA 2027)
+
+Dear Tariq,
+
+I hope you're well. I'm Osemu, a CREDIT Center student. I'm working on robotics research targeting ICRA 2027 and would appreciate your collaboration.
+
+Paper 1: "Closing the Frequency Gap" - VLA + ESN for real-time humanoid control
+Paper 2: "Robust Embodied AI Security" - ESN-based defense against adversarial attacks
+
+Your expertise in (his research area) would be valuable. You would co-author Paper 1 (code, experiments, validation). The CREDIT Center is funding the project.
+
+Interested? Let me know next week.
+
+Best,
+Andrew
+\end{verbatim}
+
+\section{Risk Mitigation}
+\begin{itemize}
+    \item \textbf{ICRA No-Show Risk:} \textbf{CRITICAL} - Must physically attend Seoul. If you can't travel, pivot to NeurIPS/ICML 2025.
+    \item \textbf{Live Trial Failure:} Run 100+ trials with extra margin
+    \item \textbf{Missing Citations:} Cross-check 20+ papers; verify DOIs
+    \item \textbf{Tariq Unavailable:} Have external co-author backup (e.g., Tarik Taleb, Aalto)
+    \item \textbf{Paper Rejection:} Both papers prepared for backup venues
+\end{itemize}
+
+\section{References (Sample)}
+\begin{thebibliography}{99}
+\bibitem{OpenVLA2025}
+  \textbf{OpenVLA Team.} "OpenVLA: Open-Source Vision-Language-Action Models." \textit{arXiv preprint arXiv:2503.08703}, 2025.
+\bibitem{Jaeger2001}
+  \textbf{H. Jaeger.} "The 'Echo State' Hypothesis." \textit{J. Comp. Sci. Eng.}, 2001.
+\bibitem{UnitreeG1}
+  \textbf{Unitree Robotics.} "G1 Edu User Manual." 2024.
+\bibitem{MuJoCo2024}
+  \textbf{Todorov, G.} "MuJoCo: A Fast and Diverse Physically-Based Simulator." \textit{arXiv:2105.04663}, 2024.
+\end{thebibliography}
+
+\balance
+\end{document}
