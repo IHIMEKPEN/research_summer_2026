@@ -295,13 +295,12 @@ Sep 13--15 & Submit & Both & PaperPlaza confirmation \\
 \section{Immediate Next Actions (This Week — Sim)}
 %----------------------------------------------------------------------
 \begin{enumerate}
-    \item Offline baselines (no live VLA needed):
-          \texttt{python3 -m src.step3\_control\_baselines --all --episode 0}
-    \item Live UnifoLM dual-process (omit \texttt{--mock}):
-          \texttt{--bridge esn}, then \texttt{zoh}, then \texttt{linear}
-          (\texttt{python3 -m src.step3\_dual\_thread\_mujoco --bridge esn --duration\_s 10}).
-    \item Or one-shot: \texttt{python3 -m src.step3\_sim\_comparison --episode 0 --duration\_s 10}
-    \item Next week: same bridges on Jetson AGX Thor $\to$ G1 via \texttt{s2r} (do not block sim on hardware).
+    \item Prefer notebooks (kernel: Research Summer 2026 / UnifoLM), not CLI.
+    \item Offline ZOH/linear: open \texttt{notebooks/step3\_control\_baselines.ipynb} $\to$ Run All.
+    \item Live UnifoLM bridges: open \texttt{notebooks/step3\_dual\_thread\_mujoco.ipynb},
+          set \texttt{MOCK=False}, run with \texttt{BRIDGE="esn"}, then \texttt{"zoh"}, then \texttt{"linear"}.
+    \item Or one-shot: \texttt{notebooks/step3\_sim\_comparison.ipynb} with \texttt{MOCK=False} $\to$ Run All.
+    \item Next week: Jetson AGX Thor $\to$ G1 via \texttt{notebooks/step5\_s2r\_*.ipynb}.
 \end{enumerate}
 
 \balance

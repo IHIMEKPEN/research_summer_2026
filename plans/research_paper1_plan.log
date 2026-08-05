@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026/Homebrew) (preloaded format=pdflatex 2026.3.4)  5 AUG 2026 13:05
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026/Homebrew) (preloaded format=pdflatex 2026.3.4)  5 AUG 2026 13:49
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -844,29 +844,35 @@ Underfull \hbox (badness 10000) in paragraph at lines 267--269
  []
 
 [3]
-Underfull \hbox (badness 10000) in paragraph at lines 298--300
-\OT1/pcr/m/n/10 -m src.step3_control_baselines --all
+Underfull \hbox (badness 10000) in paragraph at lines 299--300
+[]\OT1/ptm/m/n/10 Offline ZOH/linear: open
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 300--303
-[]\OT1/ptm/m/n/10 Live Uni-foLM dual-process (omit \OT1/pcr/m/n/10 --mock\OT1/p
-tm/m/n/10 ):
+Overfull \hbox (6.33002pt too wide) in paragraph at lines 299--300
+\OT1/pcr/m/n/10 notebooks/step3_control_baselines.ipynb
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 300--303
-\OT1/pcr/m/n/10 -m src.step3_dual_thread_mujoco
+Underfull \hbox (badness 10000) in paragraph at lines 300--302
+[]\OT1/ptm/m/n/10 Live Uni-foLM bridges: open
+ []
+
+
+Overfull \hbox (14.83002pt too wide) in paragraph at lines 300--302
+\OT1/pcr/m/n/10 notebooks/step3_dual_thread_mujoco.ipynb\OT1/ptm/m/n/10 ,
+ []
+
+
+Overfull \hbox (40.69943pt too wide) in paragraph at lines 302--303
+[]\OT1/ptm/m/n/10 Or one-shot: \OT1/pcr/m/n/10 notebooks/step3_sim_comparison.i
+pynb
  []
 
 
 Underfull \hbox (badness 10000) in paragraph at lines 303--304
-[]\OT1/ptm/m/n/10 Or one-shot: \OT1/pcr/m/n/10 python3 -m
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 303--304
-\OT1/pcr/m/n/10 src.step3_sim_comparison --episode
+[]\OT1/ptm/m/n/10 Next week: Jet-son AGX Thor $\OMS/cmsy/m/n/10 !$ \OT1/ptm/m/n
+/10 G1 via
  []
 
 
@@ -914,7 +920,7 @@ pt/homebrew/Cellar/texlive/20260301/share/texmf-dist/fonts/type1/urw/times/utmb
 i8a.pfb></opt/homebrew/Cellar/texlive/20260301/share/texmf-dist/fonts/type1/urw
 /times/utmr8a.pfb></opt/homebrew/Cellar/texlive/20260301/share/texmf-dist/fonts
 /type1/urw/times/utmri8a.pfb>
-Output written on research_paper1_plan.pdf (4 pages, 202370 bytes).
+Output written on research_paper1_plan.pdf (4 pages, 203974 bytes).
 PDF statistics:
  101 PDF objects out of 1000 (max. 8388607)
  62 compressed objects within 1 object stream
