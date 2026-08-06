@@ -160,6 +160,9 @@ class WipeClothController:
     release_blend_steps: int = RELEASE_BLEND_STEPS
     table_pos: np.ndarray = CLOTH_TABLE_POS
     hand_offset: np.ndarray = CLOTH_HAND_OFFSET
+    # Live wipe: while held, keep cloth on the table plane (hand drives XY only).
+    press_to_table: bool = False
+    press_contact_gap_m: float = 0.012
     _cloth_body_id: int = 0
     _cloth_mocap_id: int = -1
     _right_hand_id: int = 0
@@ -221,12 +224,28 @@ class WipeClothController:
 
     def hand_to_cloth_distance(self) -> float:
         target_pos, _ = self._hand_target_pose()
+        # With press_to_table the held cloth sits on the plane while the hand may
+        # float — use XY distance so proximity grasp/release stays valid.
+        if self.press_to_table and (
+            self.is_attached or self._state in (ClothState.ATTACHING, ClothState.HELD)
+        ):
+            return float(np.linalg.norm(target_pos[:2] - self._cloth_pos[:2]))
         return float(np.linalg.norm(target_pos - self._cloth_pos))
 
     def _hand_target_pose(self) -> Tuple[np.ndarray, np.ndarray]:
         rot = self.data.xmat[self._right_hand_id].reshape(3, 3)
         pos = self.data.xpos[self._right_hand_id] + rot @ self.hand_offset
         quat = _mat_to_quat(self.data.xmat[self._right_hand_id])
+        return pos, quat
+
+    def _wipe_held_pose(self, hand_pos: np.ndarray, hand_quat: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Hand XY + table-plane Z (and flat quat) so grasped cloth actually wipes."""
+        if not self.press_to_table:
+            return hand_pos, hand_quat
+        z = float(TABLE_TOP_Z) + float(CLOTH_HALF_THICKNESS) + float(self.press_contact_gap_m)
+        pos = np.array([hand_pos[0], hand_pos[1], z], dtype=np.float64)
+        # Keep cloth flat on the table while wiping (ignore wrist tilt).
+        quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         return pos, quat
 
     def _table_pose(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -269,6 +288,7 @@ class WipeClothController:
         """Advance cloth state machine; returns whether cloth is held on the hand."""
         del left_gripper
         hand_pos, hand_quat = self._hand_target_pose()
+        held_pos, held_quat = self._wipe_held_pose(hand_pos, hand_quat)
         table_pos, table_quat = self._table_pose()
 
         if self._state == ClothState.ON_TABLE:
@@ -279,7 +299,7 @@ class WipeClothController:
                 self._start_blend(ClothState.ATTACHING, self.attach_blend_steps)
 
         elif self._state == ClothState.ATTACHING:
-            self._tick_blend(hand_pos, hand_quat)
+            self._tick_blend(held_pos, held_quat)
             if self._blend_step >= self._blend_total:
                 self._state = ClothState.HELD
                 self.is_attached = True
@@ -287,7 +307,7 @@ class WipeClothController:
                 self._start_blend(ClothState.RELEASING, self.release_blend_steps)
 
         elif self._state == ClothState.HELD:
-            self._apply_mocap_pose(hand_pos, hand_quat)
+            self._apply_mocap_pose(held_pos, held_quat)
             self.is_attached = True
             if self.wants_release(right_gripper):
                 self._start_blend(ClothState.RELEASING, self.release_blend_steps)

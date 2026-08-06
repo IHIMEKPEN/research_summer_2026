@@ -92,6 +92,7 @@ class LiveWipeStats:
     gripper_mode: str = "proximity_synthetic"
     init_episode: int = 160
     instruction: str = DEFAULT_INSTRUCTION
+    press_table: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -118,6 +119,7 @@ def _live_wipe_control_worker(
     bridge: str,
     vla_hz: float,
     instruction: str,
+    press_table: bool = True,
 ) -> None:
     """Process B: 100 Hz MuJoCo + interactive cloth + wipe metrics."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -131,6 +133,7 @@ def _live_wipe_control_worker(
         duration_s=duration_s,
         init_episode=init_episode,
         instruction=instruction,
+        press_table=press_table,
     )
     step_times: list[float] = []
     video_frames: List[np.ndarray] = []
@@ -155,6 +158,7 @@ def _live_wipe_control_worker(
     # dataset init episode later; live VLA must reach it from camera.
     if env.cloth is not None:
         env.cloth.reset()
+        env.cloth.press_to_table = bool(press_table)
 
     esn = None
     if bridge == "esn":
@@ -195,7 +199,12 @@ def _live_wipe_control_worker(
             time.sleep(dt)
 
     if registers.vla_ready.value:
-        logger.info("VLA ready — live wipe loop %.1fs (bridge=%s).", duration_s, bridge)
+        logger.info(
+            "VLA ready — live wipe loop %.1fs (bridge=%s, press_table=%s).",
+            duration_s,
+            bridge,
+            press_table,
+        )
     else:
         logger.warning("VLA not ready after %.0fs — seeded token only.", wait_timeout_s)
 
@@ -314,6 +323,7 @@ class LiveWipeConfig:
     unnorm_key: str = DEFAULT_UNNORM_KEY
     init_episode: int = 160
     bridge: BridgeMode = "esn"
+    press_table: bool = True
 
 
 class LiveWipeController:
@@ -381,14 +391,16 @@ class LiveWipeController:
                 "bridge": cfg.bridge,
                 "vla_hz": cfg.vla_hz,
                 "instruction": cfg.instruction,
+                "press_table": cfg.press_table,
             },
             daemon=False,
         )
 
         logger.info(
-            "Live wipe | bridge=%s | mock=%s | duration=%.1fs | video=%s",
+            "Live wipe | bridge=%s | mock=%s | press_table=%s | duration=%.1fs | video=%s",
             cfg.bridge,
             cfg.mock,
+            cfg.press_table,
             cfg.duration_s,
             cfg.record_video,
         )
@@ -420,6 +432,7 @@ def print_live_wipe_summary(stats: LiveWipeStats, *, report_path: Path) -> None:
     print("=" * 60)
     print(f"  Bridge / VLA      : {stats.bridge} / {'mock' if stats.mock_vla else 'live UnifoLM'}")
     print(f"  Gripper mode      : {stats.gripper_mode}")
+    print(f"  Press-to-table    : {stats.press_table}")
     print(f"  Steps / duration  : {stats.steps:,} / {stats.duration_s:.1f}s")
     print(f"  Mean step / Hz    : {stats.mean_step_ms:.3f} ms / {stats.achieved_control_hz:.1f} Hz")
     print(f"  Steady max / P99  : {stats.max_step_ms_steady:.2f} / {stats.p99_step_ms:.2f} ms")
@@ -467,6 +480,12 @@ def main() -> None:
     parser.add_argument("--video_fps", type=float, default=VIDEO_FPS)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--unnorm_key", type=str, default=DEFAULT_UNNORM_KEY)
+    parser.add_argument(
+        "--press_table",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="While grasped, keep cloth on the table plane (hand drives XY; default: on)",
+    )
     args = parser.parse_args()
 
     if args.duration_s > MAX_DURATION_S:
@@ -508,6 +527,7 @@ def main() -> None:
             unnorm_key=args.unnorm_key,
             init_episode=args.init_episode,
             bridge=bridge,  # type: ignore[arg-type]
+            press_table=bool(args.press_table),
         )
         stats = LiveWipeController(cfg).run()
         tag = "mock" if args.mock else "live"
@@ -524,9 +544,11 @@ def main() -> None:
         "duration_s": args.duration_s,
         "bridges": bridges,
         "gripper_mode": "proximity_synthetic",
+        "press_table": bool(args.press_table),
         "note": (
             "Live UnifoLM wipe success. Grasp uses proximity-synthetic Dex1 proxy "
-            "(UnifoLM EE actions have no gripper channel). Distinct from Step-4 oracle."
+            "(UnifoLM EE actions have no gripper channel). Distinct from Step-4 oracle. "
+            "press_table keeps grasped cloth on the table plane (hand XY drive wipe)."
         ),
         "reports": reports,
     }

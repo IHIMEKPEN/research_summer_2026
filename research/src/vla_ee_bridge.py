@@ -257,3 +257,56 @@ def ee_action_to_joint_target(
         target_xyz=ee[9:12],
     )
     return target.astype(np.float32)
+
+
+def press_right_cloth_to_table(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    joints_29d: np.ndarray,
+    *,
+    table_top_z: float,
+    cloth_half_thickness: float = 0.004,
+    hand_offset: Optional[np.ndarray] = None,
+    contact_gap_m: float = 0.015,
+    blend: float = 0.45,
+    ik_steps: int = 18,
+) -> np.ndarray:
+    """
+    Lower the right arm so the cloth attach frame sits on the table (wipe press).
+
+    Live UnifoLM often holds the hand too high after grasp; this geometric prior
+    keeps cloth underside within the table-contact band while preserving XY.
+    """
+    from src.mujoco_wipe_scene import CLOTH_HAND_OFFSET
+
+    offset = np.asarray(
+        hand_offset if hand_offset is not None else CLOTH_HAND_OFFSET,
+        dtype=np.float64,
+    ).reshape(3)
+    q = np.asarray(joints_29d, dtype=np.float32).copy()
+    set_joint_positions_in_data(model, data, q)
+    hand_id = _body_id(model, RIGHT_HAND_BODY)
+    rot = data.xmat[hand_id].reshape(3, 3)
+    hand_pos = data.xpos[hand_id].copy()
+    attach = hand_pos + rot @ offset
+
+    # Cloth center height that puts the underside ~contact_gap_m above the table.
+    target_cloth_z = float(table_top_z) + float(cloth_half_thickness) + float(contact_gap_m)
+    target_cloth = np.array([attach[0], attach[1], target_cloth_z], dtype=np.float64)
+    target_hand = target_cloth - rot @ offset
+
+    pressed = _ik_arm_to_position(
+        model,
+        data,
+        q,
+        arm_slice=RIGHT_ARM_SLICE,
+        hand_body=RIGHT_HAND_BODY,
+        joint_names=ARM_JOINT_NAMES[1],
+        target_xyz=target_hand,
+        steps=ik_steps,
+        step_scale=0.40,
+    )
+    alpha = float(np.clip(blend, 0.0, 1.0))
+    out = q.copy()
+    out[RIGHT_ARM_SLICE] = (1.0 - alpha) * q[RIGHT_ARM_SLICE] + alpha * pressed[RIGHT_ARM_SLICE]
+    return out.astype(np.float32)
