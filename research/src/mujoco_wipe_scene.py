@@ -26,13 +26,27 @@ GRIPPER_OPEN_TYPICAL = 4.5
 GRIPPER_CLOSED_TYPICAL = 0.45
 GRIPPER_GRASP_THRESHOLD = 2.0
 
-CLOTH_TABLE_POS = np.array([0.42, 0.05, 0.775], dtype=np.float64)
-TABLE_TOP_Z = 0.775
+# Table geometry is aligned to the G1_Dex1_Wipe_Table wipe workspace
+# (held-out hand-attach XY ≈ [0.23, 0.47] × [-0.46, 0.04], wipe z ≈ 0.83–0.94).
+# Body origin is the table-top geom center; surface z = body_z + half_z.
+TABLE_BODY_POS = np.array([0.345, -0.200, 0.805], dtype=np.float64)
+TABLE_TOP_HALF_EXTENTS = np.array([0.18, 0.28, 0.025], dtype=np.float64)
+TABLE_TOP_Z = float(TABLE_BODY_POS[2] + TABLE_TOP_HALF_EXTENTS[2])  # 0.830
+
+# Cloth box half-extents (MuJoCo geom size); rest pose sits on the table surface.
+CLOTH_HALF_EXTENTS = np.array([0.12, 0.08, 0.004], dtype=np.float64)
+CLOTH_HALF_THICKNESS = float(CLOTH_HALF_EXTENTS[2])
+CLOTH_TABLE_POS = np.array(
+    [TABLE_BODY_POS[0], TABLE_BODY_POS[1], TABLE_TOP_Z + CLOTH_HALF_THICKNESS],
+    dtype=np.float64,
+)
 CLOTH_HAND_OFFSET = np.array([0.085, -0.004, -0.045], dtype=np.float64)
 
 GRASP_PROXIMITY_M = 0.14
 ATTACH_BLEND_STEPS = 12
 RELEASE_BLEND_STEPS = 10
+# Contact: cloth underside within this gap above the table surface (m).
+TABLE_CONTACT_Z_TOL = 0.04
 
 
 class ClothState(Enum):
@@ -49,34 +63,51 @@ def build_wipe_table_scene_model(
 ) -> mujoco.MjModel:
     """Compile G1 + table; cloth is a mocap body when ``interactive_cloth``."""
     robot_mjcf = robot_mjcf.resolve()
+    hx, hy, hz = CLOTH_HALF_EXTENTS
+    tx, ty, tz = TABLE_BODY_POS
+    thx, thy, thz = TABLE_TOP_HALF_EXTENTS
+    # Legs hang below the table-top center; length ≈ body_z so feet land near z=0.
+    leg_half = max(0.05, float(tz) * 0.5)
+    leg_z = -leg_half
     if interactive_cloth:
         cloth_xml = f"""
     <body name="{CLOTH_BODY_NAME}" mocap="true" pos="{CLOTH_TABLE_POS[0]} {CLOTH_TABLE_POS[1]} {CLOTH_TABLE_POS[2]}">
-      <geom name="{CLOTH_GEOM_NAME}" type="box" size="0.12 0.08 0.004"
+      <geom name="{CLOTH_GEOM_NAME}" type="box" size="{hx} {hy} {hz}"
             rgba="0.92 0.88 0.55 1" friction="0.9 0.3 0.01" mass="0.05"/>
     </body>"""
     else:
-        cloth_xml = """
-    <geom name="wipe_cloth" type="box" pos="0.42 0.05 0.775" size="0.12 0.08 0.004"
-          rgba="0.92 0.88 0.55 1"/>"""
+        cloth_xml = f"""
+    <geom name="wipe_cloth" type="box" pos="{CLOTH_TABLE_POS[0]} {CLOTH_TABLE_POS[1]} {CLOTH_TABLE_POS[2]}"
+          size="{hx} {hy} {hz}" rgba="0.92 0.88 0.55 1"/>"""
 
     scene_xml = f"""
 <mujoco model="g1_wipe_table_scene">
   <include file="{robot_mjcf.name}"/>
   <worldbody>
-    <body name="wipe_table" pos="0.45 0.0 0.72">
-      <geom name="table_top" type="box" size="0.45 0.35 0.025" rgba="0.55 0.38 0.22 1"/>
-      <geom name="table_leg_fl" type="cylinder" pos="0.35 0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
-      <geom name="table_leg_fr" type="cylinder" pos="0.35 -0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
-      <geom name="table_leg_bl" type="cylinder" pos="-0.35 0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
-      <geom name="table_leg_br" type="cylinder" pos="-0.35 -0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
+    <body name="wipe_table" pos="{tx} {ty} {tz}">
+      <geom name="table_top" type="box" size="{thx} {thy} {thz}" rgba="0.55 0.38 0.22 1"/>
+      <geom name="table_leg_fl" type="cylinder" pos="{0.75*thx} {0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_fr" type="cylinder" pos="{0.75*thx} {-0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_bl" type="cylinder" pos="{-0.75*thx} {0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_br" type="cylinder" pos="{-0.75*thx} {-0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
     </body>
     {cloth_xml}
   </worldbody>
 </mujoco>
 """
+    # Write beside the robot MJCF so the <include> relative path resolves; fall
+    # back to /tmp if the robot tree is read-only.
     scene_path = robot_mjcf.parent / "_g1_wipe_table_scene_runtime.xml"
-    scene_path.write_text(scene_xml, encoding="utf-8")
+    try:
+        scene_path.write_text(scene_xml, encoding="utf-8")
+    except OSError:
+        scene_path = Path("/tmp") / "_g1_wipe_table_scene_runtime.xml"
+        # Absolute include so the model still finds the robot MJCF from /tmp.
+        scene_xml = scene_xml.replace(
+            f'<include file="{robot_mjcf.name}"/>',
+            f'<include file="{robot_mjcf}"/>',
+        )
+        scene_path.write_text(scene_xml, encoding="utf-8")
     try:
         return mujoco.MjModel.from_xml_path(str(scene_path))
     finally:
@@ -161,6 +192,21 @@ class WipeClothController:
         self._cloth_quat = np.array([1.0, 0.0, 0.0, 0.0])
         self._apply_mocap_pose(self._cloth_pos, self._cloth_quat)
 
+    def set_rest_pose(self, pos: np.ndarray) -> None:
+        """Place the cloth rest pose on the table (XY from ``pos``, Z on surface)."""
+        xy = np.asarray(pos, dtype=np.float64).reshape(3)
+        self.table_pos = np.array(
+            [xy[0], xy[1], TABLE_TOP_Z + CLOTH_HALF_THICKNESS],
+            dtype=np.float64,
+        )
+        self.reset()
+
+    @staticmethod
+    def rest_pose_from_hand_attach(hand_attach_xyz: np.ndarray) -> np.ndarray:
+        """Project a hand-attach pose onto the table surface for cloth rest."""
+        p = np.asarray(hand_attach_xyz, dtype=np.float64).reshape(3)
+        return np.array([p[0], p[1], TABLE_TOP_Z + CLOTH_HALF_THICKNESS], dtype=np.float64)
+
     def _apply_mocap_pose(self, pos: np.ndarray, quat: np.ndarray) -> None:
         self.data.mocap_pos[self._cloth_mocap_id] = np.asarray(pos, dtype=np.float64).reshape(3)
         self.data.mocap_quat[self._cloth_mocap_id] = np.asarray(quat, dtype=np.float64).reshape(4)
@@ -207,6 +253,17 @@ class WipeClothController:
 
     def wants_release(self, right_gripper: float) -> bool:
         return float(right_gripper) >= self.grasp_threshold
+
+    def synthetic_gripper_from_proximity(self) -> float:
+        """
+        Live-VLA proxy for Dex1 width: UnifoLM EE actions have no gripper channel.
+
+        Near cloth → closed; far → open. Lets Step-3 live wipe reuse the same
+        attach FSM / metrics as oracle Step 4 without claiming a real Dex1 command.
+        """
+        if self.hand_to_cloth_distance() < self.grasp_proximity_m:
+            return float(GRIPPER_CLOSED_TYPICAL)
+        return float(GRIPPER_OPEN_TYPICAL)
 
     def update(self, right_gripper: float, left_gripper: float) -> bool:
         """Advance cloth state machine; returns whether cloth is held on the hand."""

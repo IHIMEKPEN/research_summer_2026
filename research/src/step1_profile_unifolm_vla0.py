@@ -305,6 +305,43 @@ def _is_unifolm_vla_hub(model_id: str) -> bool:
     return "UnifoLM-VLA" in model_id or "Unifolm-VLA" in model_id
 
 
+def _force_unifolm_g1_ee_6d_constants() -> None:
+    """
+    Force UnifoLM ``G1_EE_6D`` (23-D EE) constants before building the framework.
+
+    ``unifolm_vla.rlds_dataloader.constants`` inspects ``sys.argv`` and treats any
+    occurrence of the substring ``bridge`` as the BridgeData platform (7-D). Our
+    Step-3 CLIs use ``--bridge`` / ``--bridges``, which incorrectly selects 7-D
+    and then fails checkpoint load with size mismatches (23 vs 7).
+    """
+    import importlib
+    import sys
+
+    saved_argv = list(sys.argv)
+    try:
+        # Ensure detect_robot_platform() returns G1_EE_6D.
+        sys.argv = [saved_argv[0] if saved_argv else "python", "ee_6d_wipe"]
+        import unifolm_vla.rlds_dataloader.constants as uc
+
+        importlib.reload(uc)
+        if int(uc.ACTION_DIM) != 23:
+            raise RuntimeError(
+                f"Failed to force G1_EE_6D constants (ACTION_DIM={uc.ACTION_DIM})"
+            )
+        logger.info(
+            "UnifoLM constants forced to %s (ACTION_DIM=%d, chunk=%d)",
+            uc.ROBOT_PLATFORM,
+            uc.ACTION_DIM,
+            uc.NUM_ACTIONS_CHUNK,
+        )
+        # DiT header binds ACTION_DIM at import time — reload if already imported.
+        dit_mod = "unifolm_vla.model.modules.action_model.DiT_ActionHeader"
+        if dit_mod in sys.modules:
+            importlib.reload(sys.modules[dit_mod])
+    finally:
+        sys.argv = saved_argv
+
+
 def _bounds_normalize(values: np.ndarray, norm_stats: Dict[str, Any]) -> np.ndarray:
     mask = norm_stats.get("mask", np.ones_like(norm_stats["min"], dtype=bool))
     high = np.array(norm_stats["max"], dtype=np.float32)
@@ -460,6 +497,10 @@ class UnifoLMVLAWrapper:
                     "../unifolm-vla\n"
                     "Then: pip install omegaconf qwen-vl-utils"
                 )
+            # UnifoLM constants.py scans sys.argv for "bridge"/"libero"/… Our CLI
+            # flags like ``--bridge esn`` falsely select 7-D BRIDGE_CONSTANTS and
+            # break G1 wipe (23-D EE) checkpoint loading. Force G1_EE_6D first.
+            _force_unifolm_g1_ee_6d_constants()
             from unifolm_vla.model.framework.base_framework import baseframework
         except ImportError as exc:
             raise ImportError(

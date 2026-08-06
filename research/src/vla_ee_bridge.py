@@ -59,25 +59,47 @@ def rotmat_to_rot6d(rot: np.ndarray) -> np.ndarray:
 
 
 def build_wipe_table_model(robot_mjcf: Path) -> mujoco.MjModel:
-    """Compile G1 robot MJCF with a tabletop wipe scene (portable mesh paths)."""
+    """Compile G1 + wipe table (static cloth geom) aligned with ``mujoco_wipe_scene``."""
+    # Keep IK / Step-3 static scene consistent with interactive Step-4 geometry.
+    from src.mujoco_wipe_scene import (
+        CLOTH_HALF_EXTENTS,
+        CLOTH_TABLE_POS,
+        TABLE_BODY_POS,
+        TABLE_TOP_HALF_EXTENTS,
+    )
+
     robot_mjcf = robot_mjcf.resolve()
+    hx, hy, hz = CLOTH_HALF_EXTENTS
+    tx, ty, tz = TABLE_BODY_POS
+    thx, thy, thz = TABLE_TOP_HALF_EXTENTS
+    leg_half = max(0.05, float(tz) * 0.5)
+    leg_z = -leg_half
     scene_xml = f"""
 <mujoco model="g1_wipe_table_scene">
   <include file="{robot_mjcf.name}"/>
   <worldbody>
-    <body name="wipe_table" pos="0.45 0.0 0.72">
-      <geom name="table_top" type="box" size="0.45 0.35 0.025" rgba="0.55 0.38 0.22 1"/>
-      <geom name="table_leg_fl" type="cylinder" pos="0.35 0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
-      <geom name="table_leg_fr" type="cylinder" pos="0.35 -0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
-      <geom name="table_leg_bl" type="cylinder" pos="-0.35 0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
-      <geom name="table_leg_br" type="cylinder" pos="-0.35 -0.25 -0.35" size="0.02 0.35" rgba="0.35 0.35 0.35 1"/>
+    <body name="wipe_table" pos="{tx} {ty} {tz}">
+      <geom name="table_top" type="box" size="{thx} {thy} {thz}" rgba="0.55 0.38 0.22 1"/>
+      <geom name="table_leg_fl" type="cylinder" pos="{0.75*thx} {0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_fr" type="cylinder" pos="{0.75*thx} {-0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_bl" type="cylinder" pos="{-0.75*thx} {0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
+      <geom name="table_leg_br" type="cylinder" pos="{-0.75*thx} {-0.75*thy} {leg_z}" size="0.02 {leg_half}" rgba="0.35 0.35 0.35 1"/>
     </body>
-    <geom name="wipe_cloth" type="box" pos="0.42 0.05 0.775" size="0.12 0.08 0.004" rgba="0.92 0.88 0.55 1"/>
+    <geom name="wipe_cloth" type="box" pos="{CLOTH_TABLE_POS[0]} {CLOTH_TABLE_POS[1]} {CLOTH_TABLE_POS[2]}"
+          size="{hx} {hy} {hz}" rgba="0.92 0.88 0.55 1"/>
   </worldbody>
 </mujoco>
 """
     scene_path = robot_mjcf.parent / "_g1_wipe_table_scene_runtime.xml"
-    scene_path.write_text(scene_xml, encoding="utf-8")
+    try:
+        scene_path.write_text(scene_xml, encoding="utf-8")
+    except OSError:
+        scene_path = Path("/tmp") / "_g1_wipe_table_scene_runtime.xml"
+        scene_xml = scene_xml.replace(
+            f'<include file="{robot_mjcf.name}"/>',
+            f'<include file="{robot_mjcf}"/>',
+        )
+        scene_path.write_text(scene_xml, encoding="utf-8")
     try:
         return mujoco.MjModel.from_xml_path(str(scene_path))
     finally:

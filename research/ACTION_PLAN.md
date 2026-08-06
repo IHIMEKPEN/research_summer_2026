@@ -38,7 +38,8 @@ G1 defaults: **29-DoF** @ **100 Hz** (`src/g1_constants.py`).
 
 ```text
 notebooks/step3_control_baselines.ipynb     → offline ZOH / linear / PID
-notebooks/step3_dual_thread_mujoco.ipynb    → MOCK=False, BRIDGE=esn|zoh|linear
+notebooks/step3_dual_thread_mujoco.ipynb    → MOCK=False, BRIDGE=esn|zoh|linear|pid (timing)
+notebooks/step3_live_wipe_success.ipynb     → live UnifoLM wipe grasp/contact/task (Layer F)
 notebooks/step3_sim_comparison.ipynb        → one-shot offline + live suite
 ```
 

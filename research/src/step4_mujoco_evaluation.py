@@ -35,7 +35,12 @@ import numpy as np
 import torch
 
 from src.mujoco_wipe_scene import (
+    CLOTH_HALF_THICKNESS,
+    CLOTH_TABLE_POS,
+    GRIPPER_GRASP_THRESHOLD,
     RIGHT_HAND_BODY,
+    TABLE_BODY_POS,
+    TABLE_TOP_Z,
     WipeClothController,
     make_wipe_scene_env_model,
 )
@@ -88,6 +93,7 @@ class MuJoCoEvalStats:
     init_episode: int = 0
     grasp_frames: int = 0
     episode_loops: int = 1
+    episode_table_top_z: float = TABLE_TOP_Z
     video_path: Optional[str] = None
     task_metrics: Optional[WipeTaskMetrics] = None
 
@@ -134,7 +140,9 @@ class G1WipeTableEvalEnv(G1MuJoCoEnv):
         self.camera.distance = 2.15
         self.camera.azimuth = 118.0
         self.camera.elevation = -22.0
-        self.camera.lookat[:] = np.array([0.42, 0.0, 0.78])
+        self.camera.lookat[:] = np.array(
+            [TABLE_BODY_POS[0], TABLE_BODY_POS[1], TABLE_TOP_Z + 0.05]
+        )
 
         self.cloth = WipeClothController(self.model, self.data)
         self.reset()
@@ -218,6 +226,51 @@ class MuJoCoWipeEvaluator:
             pd_kp=220.0 if cfg.control_mode == "pd" else 120.0,
             pd_kd=14.0 if cfg.control_mode == "pd" else 8.0,
         )
+        # Place cloth at the demo's first grasp XY and fit a per-episode contact
+        # plane from wipe-phase hand height. A single hardcoded cloth pose sits
+        # ~0.4 m from held-out grasps; a single table Z also mismatches demos
+        # that wipe ~5–10 cm higher than the visual table.
+        episode_table_top_z = TABLE_TOP_Z
+        if env.cloth is not None:
+            wipe_z: list[float] = []
+            rest_pose: Optional[np.ndarray] = None
+            rest_t = -1
+            for t_probe in range(traj_steps):
+                if float(right_gripper[t_probe]) >= GRIPPER_GRASP_THRESHOLD:
+                    continue
+                env.set_actuated_joints(ground_truth[t_probe])
+                attach_xyz, _ = env.cloth._hand_target_pose()
+                wipe_z.append(float(attach_xyz[2]))
+                if rest_pose is None:
+                    rest_pose = WipeClothController.rest_pose_from_hand_attach(attach_xyz)
+                    rest_t = t_probe
+            if rest_pose is not None:
+                env.cloth.set_rest_pose(rest_pose)
+                episode_table_top_z = float(
+                    np.percentile(np.asarray(wipe_z, dtype=np.float64), 10)
+                    - CLOTH_HALF_THICKNESS
+                )
+                logger.info(
+                    "Cloth rest from demo grasp t=%d: [%.3f %.3f %.3f] "
+                    "(default [%.3f %.3f %.3f]); episode table plane z=%.3f "
+                    "(visual TABLE_TOP_Z=%.3f)",
+                    rest_t,
+                    rest_pose[0],
+                    rest_pose[1],
+                    rest_pose[2],
+                    CLOTH_TABLE_POS[0],
+                    CLOTH_TABLE_POS[1],
+                    CLOTH_TABLE_POS[2],
+                    episode_table_top_z,
+                    TABLE_TOP_Z,
+                )
+            else:
+                logger.warning(
+                    "No gripper-closed frame in episode %d — keeping default cloth pose.",
+                    cfg.init_episode,
+                )
+            env.reset()
+
         esn = load_checkpoint(cfg.esn_checkpoint, device=device)
         esn.eval()
         _warmup_esn_reservoir(esn, ground_truth, vla_targets, device)
@@ -227,12 +280,16 @@ class MuJoCoWipeEvaluator:
             init_episode=cfg.init_episode,
             trajectory_steps=sim_steps,
             episode_loops=episode_loops,
+            episode_table_top_z=episode_table_top_z,
         )
         step_times: list[float] = []
         video_frames: List[np.ndarray] = []
         tracking_sq_err: list[float] = []
         grasp_frames = 0
-        metrics_rec = WipeTaskMetricsRecorder(control_hz=cfg.control_hz)
+        metrics_rec = WipeTaskMetricsRecorder(
+            control_hz=cfg.control_hz,
+            table_top_z=episode_table_top_z,
+        )
 
         joint_gpu = torch.zeros(G1_DOF, device=device, dtype=torch.float32)
         vla_gpu = torch.zeros(G1_DOF, device=device, dtype=torch.float32)
@@ -359,6 +416,8 @@ def print_eval_summary(stats: MuJoCoEvalStats, *, report_path: Path) -> None:
         print(f"  False attach      : {tm.false_attach_frames} frames")
         print(f"  Wipe path (XY)    : {tm.wipe_path_length_m:.3f} m")
         print(f"  Table contact     : {tm.table_contact_ratio:.1%} of grasp frames")
+        print(f"  Wipe coverage     : {tm.wipe_coverage_m2:.4f} m²")
+        print(f"  Task success      : {tm.task_success}")
     print(f"  Mean step latency : {stats.mean_step_ms:.3f} ms  ({stats.esn_hz:.1f} Hz)")
     print(f"  Report JSON       : {report_path}")
     if stats.video_path:
@@ -373,6 +432,7 @@ def _stats_to_report(
     control_mode: str,
     ckpt: Path,
     meta: Dict[str, Any],
+    episode_table_top_z: float = TABLE_TOP_Z,
 ) -> Dict[str, Any]:
     return {
         "step": 4,
@@ -384,6 +444,8 @@ def _stats_to_report(
         "esn_train_episodes": meta.get("train_episodes"),
         "esn_heldout_episodes": meta.get("heldout_episodes"),
         "esn_step2_mse": meta.get("metrics", {}).get("mse"),
+        "visual_table_top_z": TABLE_TOP_Z,
+        "episode_table_top_z": float(episode_table_top_z),
         "tracking_mse": stats.tracking_mse,
         "tracking_rmse": stats.tracking_rmse,
         "grasp_frames": stats.grasp_frames,
@@ -477,12 +539,32 @@ def main() -> None:
         )
         stats = MuJoCoWipeEvaluator(config).run()
         report = _stats_to_report(
-            stats, episode=int(ep), control_mode=args.control_mode, ckpt=ckpt, meta=meta,
+            stats,
+            episode=int(ep),
+            control_mode=args.control_mode,
+            ckpt=ckpt,
+            meta=meta,
+            episode_table_top_z=stats.episode_table_top_z,
         )
         ep_path = RESULTS_DIR / f"mujoco_eval_report_ep{ep}.json"
         ep_path.write_text(json.dumps(report, indent=2))
         reports.append(report)
         print_eval_summary(stats, report_path=ep_path)
+
+    def _tm_mean(key: str, default: float = 0.0) -> float:
+        vals = [
+            float((r.get("task_metrics") or {}).get(key, default))
+            for r in reports
+        ]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    def _tm_rate(key: str) -> float:
+        return float(
+            np.mean([
+                1.0 if (r.get("task_metrics") or {}).get(key) else 0.0
+                for r in reports
+            ])
+        ) if reports else float("nan")
 
     summary = {
         "split": tag,
@@ -491,14 +573,14 @@ def main() -> None:
         "control_mode": args.control_mode,
         "esn_checkpoint": str(ckpt),
         "esn_train_episodes": meta.get("train_episodes"),
+        "table_top_z": TABLE_TOP_Z,
         "tracking_rmse_mean": float(np.mean([r["tracking_rmse"] for r in reports])),
         "tracking_rmse_std": float(np.std([r["tracking_rmse"] for r in reports])),
-        "grasp_success_rate": float(
-            np.mean([
-                1.0 if (r.get("task_metrics") or {}).get("grasp_success") else 0.0
-                for r in reports
-            ])
-        ),
+        "grasp_success_rate": _tm_rate("grasp_success"),
+        "task_success_rate": _tm_rate("task_success"),
+        "wipe_path_m_mean": _tm_mean("wipe_path_length_m"),
+        "table_contact_ratio_mean": _tm_mean("table_contact_ratio"),
+        "wipe_coverage_m2_mean": _tm_mean("wipe_coverage_m2"),
         "reports": reports,
     }
     summary_path = RESULTS_DIR / f"mujoco_eval_summary_{tag}.json"
@@ -509,15 +591,18 @@ def main() -> None:
     # Flat CSV for paper tables
     csv_path = RESULTS_DIR / f"mujoco_eval_summary_{tag}.csv"
     lines = [
-        "episode,tracking_rmse,grasp_success,wipe_path_m,table_contact_ratio,max_cloth_jump_m,video_path\n"
+        "episode,tracking_rmse,grasp_success,task_success,wipe_path_m,"
+        "table_contact_ratio,wipe_coverage_m2,max_cloth_jump_m,video_path\n"
     ]
     for r in reports:
         tm = r.get("task_metrics") or {}
         lines.append(
             f"{r['init_episode']},{r['tracking_rmse']:.8f},"
             f"{int(bool(tm.get('grasp_success')))},"
+            f"{int(bool(tm.get('task_success')))},"
             f"{float(tm.get('wipe_path_length_m', float('nan'))):.6f},"
             f"{float(tm.get('table_contact_ratio', float('nan'))):.6f},"
+            f"{float(tm.get('wipe_coverage_m2', float('nan'))):.6f},"
             f"{float(tm.get('max_cloth_jump_m', float('nan'))):.6f},"
             f"{r.get('video_path') or ''}\n"
         )
@@ -526,7 +611,9 @@ def main() -> None:
     print(f"CSV: {csv_path}")
     print(
         f"RMSE mean±std: {summary['tracking_rmse_mean']:.5f} ± {summary['tracking_rmse_std']:.5f} | "
-        f"grasp success rate={summary['grasp_success_rate']:.1%}"
+        f"grasp={summary['grasp_success_rate']:.1%} | "
+        f"contact={summary['table_contact_ratio_mean']:.1%} | "
+        f"task_success={summary['task_success_rate']:.1%}"
     )
 
 

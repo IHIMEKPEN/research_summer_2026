@@ -1,0 +1,3 @@
+bridge,mock_vla,mean_step_ms,achieved_hz,vla_ticks,grasp_success,task_success,wipe_path_m,table_contact_ratio,wipe_coverage_m2,video_path
+esn,False,8.742751000031285,114.38047360566732,482,True,False,18.19480686982387,0.05532078371110257,0.34160000000000007,/home/aihimekpen/research_summer_2026/research/results/step3_live_wipe/live_wipe_esn_live.mp4
+zoh,False,4.516739579228063,221.39863998333632,575,True,False,16.87957885666794,0.01744186046511628,0.19440000000000002,
