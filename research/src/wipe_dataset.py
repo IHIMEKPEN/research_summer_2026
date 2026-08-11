@@ -30,7 +30,24 @@ TRAIN_EPISODES: Tuple[int, ...] = tuple(range(0, 160))
 HELDOUT_EPISODES: Tuple[int, ...] = tuple(range(160, 200))
 
 
-def parse_episode_spec(spec: str) -> List[int]:
+def episode_splits(n_episodes: int, *, train_ratio: float = 0.8) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+    """Episode-level 80/20 split (same policy as wipe: last 20% held out)."""
+    n = int(n_episodes)
+    if n <= 0:
+        raise ValueError(f"n_episodes must be > 0, got {n}")
+    n_train = max(1, int(round(n * float(train_ratio))))
+    if n_train >= n:
+        n_train = max(1, n - 1) if n > 1 else 1
+    return tuple(range(0, n_train)), tuple(range(n_train, n))
+
+
+def parse_episode_spec(
+    spec: str,
+    *,
+    train_episodes: Optional[Sequence[int]] = None,
+    heldout_episodes: Optional[Sequence[int]] = None,
+    n_episodes: Optional[int] = None,
+) -> List[int]:
     """
     Parse episode lists from CLI/notebook strings.
 
@@ -41,15 +58,19 @@ def parse_episode_spec(spec: str) -> List[int]:
       "train" / "heldout" / "all"
       "0-7,160-162"
     """
+    train = tuple(train_episodes) if train_episodes is not None else TRAIN_EPISODES
+    heldout = tuple(heldout_episodes) if heldout_episodes is not None else HELDOUT_EPISODES
+    n_all = int(n_episodes) if n_episodes is not None else N_EPISODES
+
     text = (spec or "").strip().lower()
     if not text:
         raise ValueError("Empty episode spec")
     if text in {"train", "training"}:
-        return list(TRAIN_EPISODES)
+        return list(train)
     if text in {"heldout", "held-out", "test", "eval"}:
-        return list(HELDOUT_EPISODES)
+        return list(heldout)
     if text == "all":
-        return list(range(N_EPISODES))
+        return list(range(n_all))
 
     out: List[int] = []
     for part in text.split(","):
@@ -93,6 +114,41 @@ def load_wipe_dataset(dataset_id: str = DATASET_ID, split: str = "train"):
     from datasets import load_dataset
 
     return load_dataset(dataset_id, split=split)
+
+
+def discover_n_episodes(dataset_id: str, split: str = "train") -> int:
+    """Count distinct episode_index values (streaming-friendly)."""
+    from datasets import load_dataset
+
+    ds = load_dataset(dataset_id, split=split, streaming=True)
+    seen = set()
+    for row in ds:
+        seen.add(int(row["episode_index"]))
+    if not seen:
+        raise ValueError(f"No episodes found in {dataset_id}")
+    return max(seen) + 1
+
+
+def resolve_task_episode_spec(
+    spec: str,
+    *,
+    dataset_id: str,
+    train_ratio: float = 0.8,
+) -> List[int]:
+    """Parse train/heldout/all relative to an arbitrary UnifoLM task dataset."""
+    if dataset_id == DATASET_ID:
+        return parse_episode_spec(spec)
+    text = (spec or "").strip().lower()
+    if text in {"train", "training", "heldout", "held-out", "test", "eval", "all"}:
+        n = discover_n_episodes(dataset_id)
+        train, heldout = episode_splits(n, train_ratio=train_ratio)
+        return parse_episode_spec(
+            spec,
+            train_episodes=train,
+            heldout_episodes=heldout,
+            n_episodes=n,
+        )
+    return parse_episode_spec(spec)
 
 
 def summarize_dataset(dataset) -> Dict:

@@ -1,0 +1,11 @@
+# Default G1 / UnifoLM experiment (ICRA 2027 stack).
+# Swap `vla` / `dataset` to registered ids from:
+#   python3 -m src.experiment_registry
+#
+# Results → research/results/experiments/<vla>/<step>/
+
+vla: unifolm
+dataset: g1_dex1_wipe_table
+step: step3_live_wipe
+require_g1: true
+extras: {}

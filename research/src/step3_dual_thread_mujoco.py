@@ -947,8 +947,10 @@ class DualProcessConfig:
     video_fps: float = VIDEO_FPS
     unnorm_key: str = DEFAULT_UNNORM_KEY
     init_episode: int = 0
+    init_dataset_id: str = DATASET_ID
     use_wipe_table_scene: bool = True
     bridge: BridgeMode = "esn"
+    task_id: str = "wipe_table"
 
 
 class DualProcessController:
@@ -977,11 +979,17 @@ class DualProcessController:
         )
         video_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if cfg.use_wipe_table_scene:
+        if cfg.use_wipe_table_scene or cfg.init_dataset_id:
             try:
-                init_pose = load_wipe_table_init_joints(cfg.init_episode)
+                init_pose = load_wipe_table_init_joints(
+                    cfg.init_episode, dataset_id=cfg.init_dataset_id
+                )
                 write_init_joints(self.registers, init_pose)
-                logger.info("Seeded wipe-table init pose from dataset episode %d.", cfg.init_episode)
+                logger.info(
+                    "Seeded init pose from %s episode %d.",
+                    cfg.init_dataset_id,
+                    cfg.init_episode,
+                )
             except Exception as exc:
                 logger.warning("Could not load dataset init pose in parent: %s", exc)
 
@@ -1112,6 +1120,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Phase 3 dual-process MuJoCo control (VLA + bridge, GIL-free)",
     )
+    from src.unifolm_tasks import (
+        DEFAULT_TASK_ID,
+        add_task_arg,
+        get_task,
+        maybe_print_tasks_and_exit,
+        resolve_unnorm_key,
+    )
+
+    add_task_arg(parser, default=DEFAULT_TASK_ID)
     parser.add_argument("--mjcf", type=str, default=None, help="Path to G1 MJCF XML")
     parser.add_argument(
         "--mock",
@@ -1130,11 +1147,18 @@ def main() -> None:
                         help=f"Sim duration after VLA load (max {MAX_DURATION_S:.0f}s)")
     parser.add_argument("--control_hz", type=float, default=TARGET_HZ)
     parser.add_argument("--vla_hz", type=float, default=DEFAULT_VLA_HZ)
-    parser.add_argument("--instruction", type=str, default=DEFAULT_INSTRUCTION)
+    parser.add_argument("--instruction", type=str, default=None, help="Override task instruction")
+    parser.add_argument(
+        "--unnorm_key",
+        type=str,
+        default=None,
+        help="Override UnifoLM norm key (default: from --task)",
+    )
     parser.add_argument(
         "--esn_checkpoint",
         type=str,
-        default=str(models_path("esn_cuda_ridge")),
+        default=None,
+        help="ESN checkpoint dir (default: models/esn_cuda_ridge[_<task>])",
     )
     parser.add_argument("--profile", action="store_true", help="Export PyTorch Chrome trace")
     parser.add_argument("--profile_steps", type=int, default=500)
@@ -1142,15 +1166,28 @@ def main() -> None:
     parser.add_argument("--no_video", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--video_fps", type=float, default=VIDEO_FPS)
     args = parser.parse_args()
+    maybe_print_tasks_and_exit(args)
+    from src.unifolm_tasks import esn_checkpoint_basename
+
+    task = get_task(args.task)
+    unnorm_key = resolve_unnorm_key(task, args.unnorm_key)
+    instruction = args.instruction or task.instruction
+    esn_default = models_path(esn_checkpoint_basename(task.id))
 
     mjcf_path = resolve_mjcf_path(args.mjcf)
     if args.duration_s > MAX_DURATION_S:
         raise ValueError(f"--duration_s must be <= {MAX_DURATION_S}")
 
-    esn_ckpt = Path(args.esn_checkpoint)
+    esn_ckpt = Path(args.esn_checkpoint or esn_default)
     esn_meta: Dict[str, Any] = {}
     logger.info("MJCF: %s", mjcf_path)
-    logger.info("Bridge: %s | VLA: %s", args.bridge, "mock" if args.mock else "live UnifoLM")
+    logger.info(
+        "Task=%s | unnorm=%s | Bridge=%s | VLA=%s",
+        task.id,
+        unnorm_key,
+        args.bridge,
+        "mock" if args.mock else "live UnifoLM",
+    )
     if args.bridge == "esn":
         esn_ckpt = resolve_esn_checkpoint(args.esn_checkpoint)
         logger.info("ESN checkpoint (Step 2): %s", esn_ckpt)
@@ -1177,14 +1214,18 @@ def main() -> None:
         duration_s=args.duration_s,
         control_hz=args.control_hz,
         vla_hz=args.vla_hz,
-        instruction=args.instruction,
+        instruction=instruction,
         device=args.device,
         profile=args.profile,
         profile_steps=args.profile_steps,
         record_video=args.record_video and not args.no_video,
         video_fps=args.video_fps,
+        unnorm_key=unnorm_key,
         init_episode=args.episode,
+        init_dataset_id=task.primary_dataset_id,
+        use_wipe_table_scene=bool(task.supports_wipe_cloth_metrics),
         bridge=args.bridge,
+        task_id=task.id,
     )
     controller = DualProcessController(config)
     stats = controller.run()
@@ -1192,7 +1233,9 @@ def main() -> None:
     vla_tag = "mock" if config.mock else "live"
     report: Dict[str, Any] = {
         "architecture": "multiprocessing",
-        "task": "g1_wipe_table",
+        "task": task.id,
+        "unnorm_key": unnorm_key,
+        "dataset_id": task.primary_dataset_id,
         "bridge": config.bridge,
         "mjcf": str(mjcf_path),
         "control_hz_target": args.control_hz,

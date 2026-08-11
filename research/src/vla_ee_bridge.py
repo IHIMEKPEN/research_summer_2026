@@ -27,9 +27,18 @@ QPOS_ACTUATED_START = 7
 LEFT_ARM_SLICE = slice(15, 22)
 RIGHT_ARM_SLICE = slice(22, 29)
 WAIST_SLICE = slice(12, 15)
+LEG_SLICE = slice(0, 12)
 
 LEFT_HAND_BODY = "left_wrist_yaw_link"
 RIGHT_HAND_BODY = "right_wrist_yaw_link"
+
+# Live UnifoLM EE xyz can leave the wipe workspace; clamp before IK.
+WIPE_EE_XYZ_LO = np.array([0.05, -0.60, 0.72], dtype=np.float64)
+WIPE_EE_XYZ_HI = np.array([0.70, 0.20, 1.20], dtype=np.float64)
+# Per-tick joint rate limit at ~100 Hz (crawl toward targets without flailing).
+MAX_DQ_LEG = 0.015
+MAX_DQ_WAIST = 0.04
+MAX_DQ_ARM = 0.06
 
 ARM_JOINT_NAMES = (
     (
@@ -123,15 +132,18 @@ def resolve_robot_mjcf(user_path: Optional[str] = None) -> Path:
     raise FileNotFoundError("G1 robot MJCF not found.")
 
 
-def load_wipe_table_init_joints(episode_index: int = 0) -> np.ndarray:
-    """Return the 29D ``observation.body`` pose from the wipe-table dataset."""
+def load_wipe_table_init_joints(
+    episode_index: int = 0,
+    dataset_id: str = "unitreerobotics/G1_Dex1_Wipe_Table",
+) -> np.ndarray:
+    """Return the 29D ``observation.body`` pose from a UnifoLM G1 LeRobot dataset."""
     from datasets import load_dataset
 
-    ds = load_dataset("unitreerobotics/G1_Dex1_Wipe_Table", split="train", streaming=True)
+    ds = load_dataset(dataset_id, split="train", streaming=True)
     for row in ds:
         if int(row["episode_index"]) == episode_index:
             return extract_joint_state_29d(row).numpy().astype(np.float32)
-    raise ValueError(f"Episode {episode_index} not found in G1_Dex1_Wipe_Table")
+    raise ValueError(f"Episode {episode_index} not found in {dataset_id}")
 
 
 def _body_id(model: mujoco.MjModel, name: str) -> int:
@@ -217,6 +229,78 @@ def _ik_arm_to_position(
     return target.astype(np.float32)
 
 
+def clip_ee_action_to_wipe_workspace(ee_action_23d: np.ndarray) -> np.ndarray:
+    """Clamp left/right EE xyz into the wipe table workspace before IK."""
+    ee = np.asarray(ee_action_23d, dtype=np.float32).reshape(-1).copy()
+    if ee.size < EE_STATE_DIM:
+        ee = np.pad(ee, (0, EE_STATE_DIM - ee.size))
+    ee = ee[:EE_STATE_DIM]
+    ee[0:3] = np.clip(ee[0:3], WIPE_EE_XYZ_LO, WIPE_EE_XYZ_HI)
+    ee[9:12] = np.clip(ee[9:12], WIPE_EE_XYZ_LO, WIPE_EE_XYZ_HI)
+    return ee
+
+
+def clip_joints_to_model_limits(
+    model: mujoco.MjModel,
+    joints_29d: np.ndarray,
+) -> np.ndarray:
+    """Clip actuated joints to MuJoCo ``jnt_range`` when limited."""
+    q = np.asarray(joints_29d, dtype=np.float32).copy().reshape(-1)
+    if q.size != G1_DOF:
+        raise ValueError(f"Expected {G1_DOF} joints, got {q.size}")
+    actuated_i = 0
+    for j in range(model.njnt):
+        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
+            continue
+        if actuated_i >= G1_DOF:
+            break
+        if model.jnt_limited[j]:
+            lo, hi = model.jnt_range[j]
+            q[actuated_i] = float(np.clip(q[actuated_i], lo, hi))
+        actuated_i += 1
+    return q
+
+
+def stabilize_joint_command(
+    cmd_29d: np.ndarray,
+    *,
+    current_29d: np.ndarray,
+    freeze_legs_to: Optional[np.ndarray] = None,
+    max_dq_leg: float = MAX_DQ_LEG,
+    max_dq_waist: float = MAX_DQ_WAIST,
+    max_dq_arm: float = MAX_DQ_ARM,
+    model: Optional[mujoco.MjModel] = None,
+    rate_from: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """
+    Keep live wipe commands from exploding: freeze legs, rate-limit, joint limits.
+
+    Rate-limit against ``rate_from`` (previous command) when provided so the
+    controller can still crawl toward a distant VLA/ESN target. Limiting only
+    vs measured proprio freezes motion when the ESN stays near the robot state.
+    """
+    cmd = np.asarray(cmd_29d, dtype=np.float32).reshape(-1).copy()
+    cur = np.asarray(current_29d, dtype=np.float32).reshape(-1)
+    ref = np.asarray(rate_from if rate_from is not None else cur, dtype=np.float32).reshape(-1)
+    if freeze_legs_to is not None:
+        legs = np.asarray(freeze_legs_to, dtype=np.float32).reshape(-1)
+        cmd[LEG_SLICE] = legs[LEG_SLICE]
+    else:
+        cmd[LEG_SLICE] = cur[LEG_SLICE]
+
+    def _rate(slc: slice, max_dq: float) -> None:
+        d = cmd[slc] - ref[slc]
+        cmd[slc] = ref[slc] + np.clip(d, -max_dq, max_dq)
+
+    _rate(LEG_SLICE, max_dq_leg)
+    _rate(WAIST_SLICE, max_dq_waist)
+    _rate(LEFT_ARM_SLICE, max_dq_arm)
+    _rate(RIGHT_ARM_SLICE, max_dq_arm)
+    if model is not None:
+        cmd = clip_joints_to_model_limits(model, cmd)
+    return cmd.astype(np.float32)
+
+
 def ee_action_to_joint_target(
     model: mujoco.MjModel,
     data: mujoco.MjData,
@@ -228,15 +312,12 @@ def ee_action_to_joint_target(
 
     Leg joints are held near the current state; waist and arms track the VLA EE pose.
     """
-    ee = np.asarray(ee_action_23d, dtype=np.float32).reshape(-1)
-    if ee.size < EE_STATE_DIM:
-        ee = np.pad(ee, (0, EE_STATE_DIM - ee.size))
-    ee = ee[:EE_STATE_DIM]
+    ee = clip_ee_action_to_wipe_workspace(ee_action_23d)
 
     current = np.asarray(current_joints_29d, dtype=np.float32)
     target = current.copy()
-    target[:12] = current[:12]
-    target[WAIST_SLICE] = ee[18:21]
+    target[LEG_SLICE] = current[LEG_SLICE]
+    target[WAIST_SLICE] = np.clip(ee[18:21], -0.8, 0.8)
 
     target = _ik_arm_to_position(
         model,
@@ -256,6 +337,8 @@ def ee_action_to_joint_target(
         joint_names=ARM_JOINT_NAMES[1],
         target_xyz=ee[9:12],
     )
+    target = clip_joints_to_model_limits(model, target)
+    target[LEG_SLICE] = current[LEG_SLICE]
     return target.astype(np.float32)
 
 

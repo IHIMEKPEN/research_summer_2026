@@ -1,0 +1,23 @@
+============================================================
+UnifoLM-VLA-0 Profiling Report — Week 1-2 Deliverable
+Model: __mock__
+Task : G1_Clean_Table
+Profiler source : pytorch_profiler
+Generated at    : 2026-08-06T01:03:42
+Run tag         : pytorch_profiler_20260806_010342
+============================================================
+
+Latency (ms):
+  Mean   : 496.58 ± 0.00
+  Median : 496.58
+  P95    : 496.58
+  P99    : 496.58
+
+Control Rate:
+  Mean   : 2.014 Hz
+  Target : 100 Hz
+  Gap    : 49.7x below G1 requirement
+
+Failure Analysis:
+  Rate   : 0.0%
+  Modes  : {}

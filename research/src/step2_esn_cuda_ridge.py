@@ -166,6 +166,7 @@ def load_episode_trajectory_numpy(
   episode_index: int,
   control_hz: float = CONTROL_HZ,
   vla_hz: float = VLA_HZ,
+  dataset_id: str = DATASET_ID,
 ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Load episode joint GT and 2 Hz zero-order-held VLA tokens on CPU (numpy).
@@ -176,10 +177,10 @@ def load_episode_trajectory_numpy(
   """
   from datasets import load_dataset
 
-  dataset = load_dataset(DATASET_ID, split="train")
+  dataset = load_dataset(dataset_id, split="train")
   rows = [row for row in dataset if row["episode_index"] == episode_index]
   if not rows:
-    raise ValueError(f"Episode {episode_index} not found in {DATASET_ID}")
+    raise ValueError(f"Episode {episode_index} not found in {dataset_id}")
 
   rows.sort(key=lambda r: r["frame_index"])
   raw_states = torch.stack([extract_joint_state_29d(r) for r in rows], dim=0)
@@ -194,14 +195,15 @@ def load_episode_trajectory_numpy(
 def load_episode_gripper_trajectory_numpy(
   episode_index: int,
   control_hz: float = CONTROL_HZ,
+  dataset_id: str = DATASET_ID,
 ) -> Tuple[np.ndarray, np.ndarray]:
   """Load Dex1 left/right gripper scalars resampled to ``control_hz``."""
   from datasets import load_dataset
 
-  dataset = load_dataset(DATASET_ID, split="train")
+  dataset = load_dataset(dataset_id, split="train")
   rows = [row for row in dataset if row["episode_index"] == episode_index]
   if not rows:
-    raise ValueError(f"Episode {episode_index} not found in {DATASET_ID}")
+    raise ValueError(f"Episode {episode_index} not found in {dataset_id}")
 
   rows.sort(key=lambda r: r["frame_index"])
   left = torch.tensor(
@@ -922,7 +924,16 @@ def load_checkpoint(
 # ── Main ──────────────────────────────────────────────────────
 def main() -> None:
   parser = argparse.ArgumentParser(description="Train CUDA ESN readout with ridge regression")
-  parser.add_argument("--dataset", type=str, default=DATASET_ID)
+  from src.unifolm_tasks import (
+    DEFAULT_TASK_ID,
+    add_task_arg,
+    get_task,
+    maybe_print_tasks_and_exit,
+  )
+  from src.wipe_dataset import resolve_task_episode_spec
+
+  add_task_arg(parser, default=DEFAULT_TASK_ID)
+  parser.add_argument("--dataset", type=str, default=None, help="Override HF dataset id")
   parser.add_argument(
     "--episode",
     type=int,
@@ -933,13 +944,13 @@ def main() -> None:
     "--train_episodes",
     type=str,
     default="train",
-    help="Episode spec: train|0-159|0,1,2 (default: canonical train 0-159)",
+    help="Episode spec: train|0-159|0,1,2 (default: canonical train split)",
   )
   parser.add_argument(
     "--heldout_episodes",
     type=str,
     default="heldout",
-    help="Episode spec for generalization eval (default: heldout 160-199)",
+    help="Episode spec for generalization eval (default: heldout split)",
   )
   parser.add_argument(
     "--sweep_episodes",
@@ -975,29 +986,33 @@ def main() -> None:
   parser.add_argument("--jerk_weight", type=float, default=1.0,
                       help="Weight for jerk vs MSE in best-model selection score")
   args = parser.parse_args()
+  maybe_print_tasks_and_exit(args)
+  task = get_task(args.task)
+  dataset_id = args.dataset or task.primary_dataset_id
 
   if not torch.cuda.is_available() and args.device.startswith("cuda"):
     raise RuntimeError("CUDA is required for this script (target: Tesla V100).")
 
   device = torch.device(args.device)
   logger.info("Device: %s (%s)", device, torch.cuda.get_device_name(device))
+  logger.info("Task=%s | unnorm_key=%s | dataset=%s", task.id, task.unnorm_key, dataset_id)
 
   if args.episode is not None:
     train_episodes = [int(args.episode)]
   else:
-    train_episodes = parse_episode_spec(args.train_episodes)
+    train_episodes = resolve_task_episode_spec(args.train_episodes, dataset_id=dataset_id)
   if args.max_train_episodes is not None:
     train_episodes = train_episodes[: max(0, int(args.max_train_episodes))]
-  heldout_episodes = parse_episode_spec(args.heldout_episodes)
+  heldout_episodes = resolve_task_episode_spec(args.heldout_episodes, dataset_id=dataset_id)
   if args.max_heldout_episodes is not None:
     heldout_episodes = heldout_episodes[: max(0, int(args.max_heldout_episodes))]
   if args.sweep_episodes:
-    sweep_episodes = parse_episode_spec(args.sweep_episodes)
+    sweep_episodes = resolve_task_episode_spec(args.sweep_episodes, dataset_id=dataset_id)
   else:
     sweep_episodes = [train_episodes[0]]
 
-  logger.info("Loading dataset %s ...", args.dataset)
-  dataset = load_dataset(args.dataset, split="train")
+  logger.info("Loading dataset %s ...", dataset_id)
+  dataset = load_dataset(dataset_id, split="train")
   logger.info(
     "Train eps=%d %s… | sweep eps=%s | held-out eps=%d %s…",
     len(train_episodes),
@@ -1027,8 +1042,13 @@ def main() -> None:
     seed=args.seed,
   )
 
-  out_dir = models_path("esn_cuda_ridge")
-  sweep_dir = results_path("step2_training")
+  from src.unifolm_tasks import esn_checkpoint_basename
+
+  out_dir = models_path(esn_checkpoint_basename(task.id))
+  if task.id == "wipe_table":
+    sweep_dir = results_path("step2_training")
+  else:
+    sweep_dir = results_path("step2_training", task.id)
 
   if args.skip_sweep:
     esn = EchoStateNetwork(base_cfg, device=device).to(device)
@@ -1093,13 +1113,15 @@ def main() -> None:
     train_episodes=train_episodes,
     heldout_episodes=heldout_episodes,
     heldout_metrics=heldout_mean or None,
-    dataset_id=args.dataset,
+    dataset_id=dataset_id,
     basename=BEST_CHECKPOINT_BASENAME,
   )
 
   print("\n" + "=" * 60)
   print("  ESN CUDA Ridge Training — Phase 2 (multi-episode)")
   print("=" * 60)
+  print(f"  Task            : {task.id} ({task.unnorm_key})")
+  print(f"  Dataset         : {dataset_id}")
   print(f"  Train episodes  : {len(train_episodes)}  ({train_episodes[0]}…{train_episodes[-1]})")
   print(f"  Held-out episodes: {len(heldout_episodes)}")
   print(f"  Canonical split : train={len(TRAIN_EPISODES)} heldout={len(HELDOUT_EPISODES)}")

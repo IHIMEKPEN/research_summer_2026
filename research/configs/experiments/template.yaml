@@ -1,0 +1,19 @@
+# Template for adding a NEW VLA or dataset later.
+# 1) Copy this file.
+# 2) Register the backend/dataset in src/experiment_registry.py (or call
+#    register_vla / register_dataset at import time).
+# 3) Set require_g1: true only if embodiment is g1_29dof and the VLA maps to
+#    29-DoF joint tokens (or EE that vla_ee_bridge can IK).
+#
+# Xiaomi-Robotics-1 example (NOT runnable on G1 ESN as-is):
+#   vla: xiaomi_xr1
+#   dataset: <your_dual_arm_dataset>
+#   require_g1: false
+
+vla: unifolm
+dataset: g1_dex1_wipe_table
+step: custom_run
+require_g1: true
+extras:
+  instruction: "Wipe the table with the cloth."
+  note: "Edit vla/dataset ids after registering them."

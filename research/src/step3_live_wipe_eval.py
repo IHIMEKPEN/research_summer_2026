@@ -63,7 +63,11 @@ from src.step3_dual_thread_mujoco import (
 )
 from src.step2_esn_cuda_ridge import load_checkpoint
 from src.step4_mujoco_evaluation import G1WipeTableEvalEnv
-from src.vla_ee_bridge import load_wipe_table_init_joints
+from src.vla_ee_bridge import (
+    clip_joints_to_model_limits,
+    load_wipe_table_init_joints,
+    stabilize_joint_command,
+)
 from src.wipe_task_metrics import WipeTaskMetrics, WipeTaskMetricsRecorder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -93,6 +97,7 @@ class LiveWipeStats:
     init_episode: int = 160
     instruction: str = DEFAULT_INSTRUCTION
     press_table: bool = True
+    stabilize_motion: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -134,6 +139,7 @@ def _live_wipe_control_worker(
         init_episode=init_episode,
         instruction=instruction,
         press_table=press_table,
+        stabilize_motion=True,
     )
     step_times: list[float] = []
     video_frames: List[np.ndarray] = []
@@ -167,6 +173,7 @@ def _live_wipe_control_worker(
 
     init_q = env.get_joint_positions()
     write_vla_token(registers, init_q)
+    freeze_legs = init_q.astype(np.float32).copy()
 
     dt = 1.0 / control_hz
     hold_ticks = max(1, int(round(control_hz / max(vla_hz, 1e-6))))
@@ -176,6 +183,7 @@ def _live_wipe_control_worker(
     prev_token = init_q.astype(np.float32).copy()
     curr_token = init_q.astype(np.float32).copy()
     pid_q = init_q.astype(np.float32).copy()
+    prev_cmd = init_q.astype(np.float32).copy()
     last_seq = 0
     ticks_since_update = 0
     metrics_rec = WipeTaskMetricsRecorder(
@@ -219,6 +227,9 @@ def _live_wipe_control_worker(
             if seq != last_seq:
                 prev_token = curr_token.copy()
                 curr_token = np.asarray(vla_token, dtype=np.float32).reshape(G1_DOF).copy()
+                # Sanitize sparse VLA targets: freeze stance, clip joint limits.
+                curr_token[:12] = freeze_legs[:12]
+                curr_token = clip_joints_to_model_limits(env.model, curr_token)
                 last_seq = int(seq)
                 ticks_since_update = 0
             else:
@@ -229,7 +240,18 @@ def _live_wipe_control_worker(
                 joint_gpu.copy_(torch.from_numpy(joint_pos).to(device=device, dtype=torch.float32))
                 vla_gpu.copy_(torch.from_numpy(curr_token).to(device=device, dtype=torch.float32))
                 esn.update_vla_target(vla_gpu)
-                cmd_np = esn.step_proprio(joint_gpu).detach().cpu().numpy()
+                esn_cmd = esn.step_proprio(joint_gpu).detach().cpu().numpy().astype(np.float32)
+                # If ESN collapses onto proprio while VLA is far (or goes insane),
+                # crawl toward the sanitized VLA target instead of freezing / flailing.
+                if (
+                    float(np.max(np.abs(esn_cmd))) > 3.5
+                    or float(np.linalg.norm(esn_cmd - curr_token)) > 2.0
+                    or float(np.linalg.norm(esn_cmd - joint_pos))
+                    < 0.25 * max(float(np.linalg.norm(curr_token - joint_pos)), 1e-3)
+                ):
+                    cmd_np = curr_token
+                else:
+                    cmd_np = esn_cmd
             elif bridge == "zoh":
                 cmd_np = curr_token
             elif bridge == "linear":
@@ -242,6 +264,17 @@ def _live_wipe_control_worker(
             else:
                 pid_q = online_pid_command(q=pid_q, target=curr_token, dt=dt)
                 cmd_np = pid_q
+
+            # Live UnifoLM EE→IK→ESN otherwise flails legs/arms (glitchy video);
+            # freeze stance legs, crawl toward targets, clip to joint limits.
+            cmd_np = stabilize_joint_command(
+                cmd_np,
+                current_29d=joint_pos,
+                freeze_legs_to=freeze_legs,
+                rate_from=prev_cmd,
+                model=env.model,
+            )
+            prev_cmd = cmd_np.astype(np.float32).copy()
 
             env.apply_unified_control(cmd_np)
             env.step_physics()
@@ -453,8 +486,23 @@ def print_live_wipe_summary(stats: LiveWipeStats, *, report_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live UnifoLM wipe success (Layer F)")
+    from src.unifolm_tasks import (
+        DEFAULT_TASK_ID,
+        add_task_arg,
+        esn_checkpoint_basename,
+        get_task,
+        maybe_print_tasks_and_exit,
+        resolve_unnorm_key,
+    )
+
+    add_task_arg(parser, default=DEFAULT_TASK_ID)
     parser.add_argument("--mjcf", type=str, default=None)
-    parser.add_argument("--esn_checkpoint", type=str, default=str(models_path("esn_cuda_ridge")))
+    parser.add_argument(
+        "--esn_checkpoint",
+        type=str,
+        default=None,
+        help="ESN checkpoint dir (default: models/esn_cuda_ridge[_<task>])",
+    )
     parser.add_argument("--bridge", choices=list(ALL_BRIDGES), default=None)
     parser.add_argument(
         "--modes",
@@ -473,13 +521,23 @@ def main() -> None:
     parser.add_argument("--duration_s", type=float, default=30.0)
     parser.add_argument("--control_hz", type=float, default=TARGET_HZ)
     parser.add_argument("--vla_hz", type=float, default=DEFAULT_VLA_HZ)
-    parser.add_argument("--instruction", type=str, default=DEFAULT_INSTRUCTION)
+    parser.add_argument(
+        "--instruction",
+        type=str,
+        default=None,
+        help="Language instruction (default: from --task)",
+    )
     parser.add_argument("--init_episode", type=int, default=160)
     parser.add_argument("--record_video", action="store_true")
     parser.add_argument("--no_video", action="store_true")
     parser.add_argument("--video_fps", type=float, default=VIDEO_FPS)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--unnorm_key", type=str, default=DEFAULT_UNNORM_KEY)
+    parser.add_argument(
+        "--unnorm_key",
+        type=str,
+        default=None,
+        help="Override UnifoLM norm key (default: from --task)",
+    )
     parser.add_argument(
         "--press_table",
         action=argparse.BooleanOptionalAction,
@@ -487,6 +545,17 @@ def main() -> None:
         help="While grasped, keep cloth on the table plane (hand drives XY; default: on)",
     )
     args = parser.parse_args()
+    maybe_print_tasks_and_exit(args)
+    task = get_task(args.task)
+    unnorm_key = resolve_unnorm_key(task, args.unnorm_key)
+    instruction = args.instruction or task.instruction
+    if not task.supports_wipe_cloth_metrics:
+        logger.warning(
+            "Task %s has no cloth wipe metrics. Live wipe eval is for wipe_table; "
+            "prefer: python3 -m src.step3_dual_thread_mujoco --task %s",
+            task.id,
+            task.id,
+        )
 
     if args.duration_s > MAX_DURATION_S:
         raise ValueError(f"--duration_s must be <= {MAX_DURATION_S}")
@@ -505,7 +574,9 @@ def main() -> None:
 
     want_video = bool(args.record_video) and not args.no_video
     mjcf = resolve_mjcf_path(args.mjcf)
-    ckpt = resolve_esn_checkpoint(args.esn_checkpoint)
+    ckpt = resolve_esn_checkpoint(
+        args.esn_checkpoint or str(models_path(esn_checkpoint_basename(task.id)))
+    )
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     reports: List[Dict[str, Any]] = []
@@ -519,12 +590,12 @@ def main() -> None:
             duration_s=args.duration_s,
             control_hz=args.control_hz,
             vla_hz=args.vla_hz,
-            instruction=args.instruction,
+            instruction=instruction,
             device=args.device,
             record_video=record_video,
             video_path=video_path if record_video else None,
             video_fps=args.video_fps,
-            unnorm_key=args.unnorm_key,
+            unnorm_key=unnorm_key,
             init_episode=args.init_episode,
             bridge=bridge,  # type: ignore[arg-type]
             press_table=bool(args.press_table),
@@ -534,6 +605,9 @@ def main() -> None:
         report_path = RESULTS_DIR / f"live_wipe_report_{bridge}_{tag}.json"
         report = stats.to_dict()
         report["esn_checkpoint"] = str(ckpt)
+        report["task"] = task.id
+        report["unnorm_key"] = unnorm_key
+        report["dataset_id"] = task.primary_dataset_id
         report_path.write_text(json.dumps(report, indent=2))
         reports.append(report)
         print_live_wipe_summary(stats, report_path=report_path)
@@ -541,6 +615,9 @@ def main() -> None:
     summary = {
         "n_trials": len(reports),
         "mock_vla": args.mock,
+        "task": task.id,
+        "unnorm_key": unnorm_key,
+        "dataset_id": task.primary_dataset_id,
         "duration_s": args.duration_s,
         "bridges": bridges,
         "gripper_mode": "proximity_synthetic",

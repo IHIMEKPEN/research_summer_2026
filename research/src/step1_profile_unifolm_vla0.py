@@ -1474,7 +1474,16 @@ def save_logs(
 
 # ── Main ─────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="Profile UnifoLM-VLA-0 inference on G1_Clean_Table sim")
+    parser = argparse.ArgumentParser(description="Profile UnifoLM-VLA-0 inference on G1 tasks")
+    from src.unifolm_tasks import (
+        DEFAULT_TASK_ID,
+        add_task_arg,
+        get_task,
+        maybe_print_tasks_and_exit,
+        resolve_unnorm_key,
+    )
+
+    add_task_arg(parser, default=DEFAULT_TASK_ID)
     parser.add_argument("--model", type=str, default="unitreerobotics/UnifoLM-VLA-Base")
     parser.add_argument(
         "--vlm-backbone",
@@ -1485,15 +1494,16 @@ def main():
     parser.add_argument(
         "--unnorm-key",
         type=str,
-        default="g1_clean_table",
-        help="Dataset key in VLA dataset_statistics.json for action denormalization",
+        default=None,
+        help="Override dataset key in VLA dataset_statistics.json (default: from --task)",
     )
     parser.add_argument("--n_trials", type=int, default=100)
     parser.add_argument("--use_int4", action="store_true", help="Use INT4 quantisation (requires bitsandbytes)")
     parser.add_argument(
         "--instruction",
         type=str,
-        default="Clean the table by moving all clutter items into the bin.",
+        default=None,
+        help="Language instruction (default: from --task)",
     )
     parser.add_argument("--mock", action="store_true", help="Force mock inference (no model download needed)")
     parser.add_argument(
@@ -1518,16 +1528,21 @@ def main():
         help="Warmup forward passes before CUDA Graph capture (minimum 3)",
     )
     args = parser.parse_args()
+    maybe_print_tasks_and_exit(args)
+    task = get_task(args.task)
+    unnorm_key = resolve_unnorm_key(task, args.unnorm_key)
+    instruction = args.instruction or task.instruction
 
     logger.info("=" * 60)
     logger.info("  Step 1 — UnifoLM-VLA-0 Profiler | Research Plan Week 1-2")
+    logger.info("  Task=%s | unnorm_key=%s", task.id, unnorm_key)
     logger.info("=" * 60)
 
     env = MockG1CleanTableEnv(image_size=(224, 224))
     model = UnifoLMVLAWrapper(
         model_id=args.model if not args.mock else "__mock__",
         vlm_backbone_id=args.vlm_backbone,
-        unnorm_key=args.unnorm_key,
+        unnorm_key=unnorm_key,
         use_int4=args.use_int4,
         action_dim=G1_DOF,
         allow_mock_fallback=not args.no_mock_fallback,
@@ -1544,7 +1559,7 @@ def main():
         model=model,
         env=env,
         n_trials=args.n_trials,
-        instruction=args.instruction,
+        instruction=instruction,
         profiler_source=profiler_source,
         run_tag=run_tag,
     )

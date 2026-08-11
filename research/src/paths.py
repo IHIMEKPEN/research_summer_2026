@@ -71,6 +71,20 @@ def results_path(*subpath: str) -> Path:
     return p
 
 
+def experiment_results_path(vla_id: str, *subpath: str) -> Path:
+    """
+    Namespaced results for a chosen VLA backend (never mixes stacks).
+
+    Example: experiment_results_path('unifolm', 'step3_live_wipe')
+      → research/results/experiments/unifolm/step3_live_wipe/
+    Legacy UnifoLM paths (``step1_profiling_unifolm_vla0``, …) stay unchanged.
+    """
+    slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(vla_id).strip().lower())
+    if not slug:
+        raise ValueError("vla_id must be non-empty")
+    return results_path("experiments", slug, *subpath)
+
+
 def models_path(*subpath: str) -> Path:
     """e.g. models_path('esn_cuda_ridge') -> research/models/esn_cuda_ridge"""
     p = models_root() / Path(*subpath)

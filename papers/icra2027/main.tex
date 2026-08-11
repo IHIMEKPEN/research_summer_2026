@@ -85,7 +85,7 @@ On a DGX Station (Tesla V100-DGXS-32GB), live \texttt{UnifoLM-VLA-Base} profilin
 ESN training and evaluation use \texttt{G1\_Dex1\_Wipe\_Table} (200 episodes, $\sim$0.70\,h; train $0$--$159$ / held-out $160$--$199$).
 A multi-episode CUDA ESN ($\alpha{=}0.3$, $\lambda{=}1$) reaches held-out open-loop RMSE \textbf{$2.78\times10^{-3}\!\pm\!3.44\times10^{-3}$\,rad} ($\sim$5.6$\times$ better than linear upsampling) and MuJoCo \emph{dataset-oracle} RMSE \textbf{$3.00\times10^{-3}\!\pm\!3.56\times10^{-3}$\,rad} on all 40 held-out episodes, with oracle grasp / task success \textbf{100\%} and mean table-contact ratio \textbf{74.5\%}.
 Live UnifoLM dual-process control clears 100\,Hz on average for all bridges; ESN mean step is 6.92\,ms (145\,Hz) with GPU-contention tails above 10\,ms.
-Under the same live UnifoLM stack with interactive cloth, a proximity-synthetic Dex1 proxy plus a table-plane press prior (held cloth tracks hand XY on the table surface) yields \textbf{100\%} table contact and \textbf{task success} for both ESN and ZOH over 30\,s---without the prior, live plans lift the cloth and contact collapses.
+Under the same live UnifoLM stack with interactive cloth, a proximity-synthetic Dex1 proxy, table-plane press prior, and motion clamps (frozen stance legs, EE workspace / joint limits, crawl rate-limit) yields \textbf{100\%} table contact and \textbf{task success} for ESN over 30\,s without the prior flailing failure mode.
 S2R/DIRT deploy is the next step.
 \end{abstract}
 
@@ -171,10 +171,10 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
   & Train$\cap$eval overlap & 0 episodes & split respected \\
 \midrule
 \multirow{4}{*}{Live wipe}
-  & ESN mean step / rate & 7.88\,ms / 127\,Hz & 30\,s; live UnifoLM \\
-  & ESN grasp / contact / task & yes / 100\% / \textbf{yes} & press\_table + prox.\ Dex1 \\
+  & ESN mean step / rate & 8.09\,ms / 124\,Hz & 30\,s; live UnifoLM \\
+  & ESN grasp / contact / task & yes / 100\% / \textbf{yes} & press\_table + motion clamp \\
   & ZOH grasp / contact / task & yes / 100\% / \textbf{yes} & same scene / instruction \\
-  & ESN wipe path / coverage & 18.8\,m / 0.896\,m$^2$ & cloth Z constrained to table \\
+  & ESN wipe path / coverage & 11.8\,m / 0.264\,m$^2$ & legs frozen; joint rate-limit \\
 \bottomrule
 \end{tabularx}
 \end{table*}

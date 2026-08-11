@@ -1,3 +1,2 @@
-bridge,mock_vla,press_table,mean_step_ms,achieved_hz,vla_ticks,grasp_success,task_success,wipe_path_m,table_contact_ratio,wipe_coverage_m2,video_path
-esn,False,True,7.879310434518115,126.91465938683481,550,True,True,18.793203144301785,1.0,0.8956000000000001,/home/aihimekpen/research_summer_2026/research/results/step3_live_wipe/live_wipe_esn_live.mp4
-zoh,False,True,5.05262405751273,197.9169612892737,550,True,True,15.591313100611938,1.0,0.5748000000000001,
+bridge,mock_vla,press_table,stabilize_motion,mean_step_ms,achieved_hz,vla_ticks,grasp_success,task_success,wipe_path_m,table_contact_ratio,wipe_coverage_m2,video_path
+esn,False,True,True,8.085607312445692,123.67654789031862,625,True,True,11.78283632755263,1.0,0.2644,/home/aihimekpen/research_summer_2026/research/results/step3_live_wipe/live_wipe_esn_live.mp4

@@ -114,6 +114,9 @@ class MuJoCoEvalConfig:
     video_fps: float = VIDEO_FPS
     device: str = "cuda"
     loop_episode: bool = False
+    dataset_id: str = DATASET_ID
+    task_id: str = "wipe_table"
+    enable_wipe_cloth: bool = True
 
 
 class G1WipeTableEvalEnv(G1MuJoCoEnv):
@@ -177,18 +180,26 @@ class MuJoCoWipeEvaluator:
 
         device = torch.device(cfg.device)
         logger.info(
-            "Loading episode %d from %s @ %.0f Hz (VLA hold %.1f Hz)",
+            "Loading episode %d from %s @ %.0f Hz (VLA hold %.1f Hz) task=%s",
             cfg.init_episode,
-            DATASET_ID,
+            cfg.dataset_id,
             cfg.control_hz,
             cfg.vla_hz,
+            cfg.task_id,
         )
         ground_truth, vla_targets = load_episode_trajectory_numpy(
-            cfg.init_episode, control_hz=cfg.control_hz, vla_hz=cfg.vla_hz
+            cfg.init_episode,
+            control_hz=cfg.control_hz,
+            vla_hz=cfg.vla_hz,
+            dataset_id=cfg.dataset_id,
         )
-        left_gripper, right_gripper = load_episode_gripper_trajectory_numpy(
-            cfg.init_episode, control_hz=cfg.control_hz
-        )
+        left_gripper = right_gripper = None
+        if cfg.enable_wipe_cloth:
+            left_gripper, right_gripper = load_episode_gripper_trajectory_numpy(
+                cfg.init_episode,
+                control_hz=cfg.control_hz,
+                dataset_id=cfg.dataset_id,
+            )
         traj_steps = int(ground_truth.shape[0])
         episode_duration_s = traj_steps / cfg.control_hz
         # Default: one episode only (avoids multi-loop 60 s / multi-hundred-MB videos).
@@ -217,21 +228,41 @@ class MuJoCoWipeEvaluator:
             "s" if episode_loops != 1 else "",
         )
 
-        env = G1WipeTableEvalEnv(
-            mjcf_path=cfg.mjcf_path,
-            control_hz=cfg.control_hz,
-            enable_video_renderer=cfg.record_video,
-            init_joints_29d=ground_truth[0],
-            wipe_table_scene=False,
-            pd_kp=220.0 if cfg.control_mode == "pd" else 120.0,
-            pd_kd=14.0 if cfg.control_mode == "pd" else 8.0,
-        )
+        if cfg.enable_wipe_cloth:
+            env = G1WipeTableEvalEnv(
+                mjcf_path=cfg.mjcf_path,
+                control_hz=cfg.control_hz,
+                enable_video_renderer=cfg.record_video,
+                init_joints_29d=ground_truth[0],
+                wipe_table_scene=False,
+                pd_kp=220.0 if cfg.control_mode == "pd" else 120.0,
+                pd_kd=14.0 if cfg.control_mode == "pd" else 8.0,
+            )
+        else:
+            env = G1MuJoCoEnv(
+                mjcf_path=cfg.mjcf_path,
+                control_hz=cfg.control_hz,
+                enable_video_renderer=cfg.record_video,
+                init_joints_29d=ground_truth[0],
+                wipe_table_scene=False,
+                pd_kp=220.0 if cfg.control_mode == "pd" else 120.0,
+                pd_kd=14.0 if cfg.control_mode == "pd" else 8.0,
+            )
+            # Provide cloth=None attribute so shared loop can check hasattr-style.
+            if not hasattr(env, "cloth"):
+                env.cloth = None  # type: ignore[attr-defined]
+            if not hasattr(env, "update_cloth"):
+                def _no_cloth(rg: float, lg: float) -> bool:
+                    return False
+
+                env.update_cloth = _no_cloth  # type: ignore[method-assign]
+
         # Place cloth at the demo's first grasp XY and fit a per-episode contact
         # plane from wipe-phase hand height. A single hardcoded cloth pose sits
         # ~0.4 m from held-out grasps; a single table Z also mismatches demos
         # that wipe ~5–10 cm higher than the visual table.
         episode_table_top_z = TABLE_TOP_Z
-        if env.cloth is not None:
+        if cfg.enable_wipe_cloth and getattr(env, "cloth", None) is not None:
             wipe_z: list[float] = []
             rest_pose: Optional[np.ndarray] = None
             rest_t = -1
@@ -286,9 +317,13 @@ class MuJoCoWipeEvaluator:
         video_frames: List[np.ndarray] = []
         tracking_sq_err: list[float] = []
         grasp_frames = 0
-        metrics_rec = WipeTaskMetricsRecorder(
-            control_hz=cfg.control_hz,
-            table_top_z=episode_table_top_z,
+        metrics_rec = (
+            WipeTaskMetricsRecorder(
+                control_hz=cfg.control_hz,
+                table_top_z=episode_table_top_z,
+            )
+            if cfg.enable_wipe_cloth
+            else None
         )
 
         joint_gpu = torch.zeros(G1_DOF, device=device, dtype=torch.float32)
@@ -306,7 +341,7 @@ class MuJoCoWipeEvaluator:
                 esn.reset_state()
                 _warmup_esn_reservoir(esn, ground_truth, vla_targets, device)
                 env.step_kinematic(ground_truth[0])
-                if env.cloth is not None:
+                if getattr(env, "cloth", None) is not None:
                     env.cloth.reset()
                     import mujoco
                     mujoco.mj_forward(env.model, env.data)
@@ -323,14 +358,15 @@ class MuJoCoWipeEvaluator:
                 env.apply_unified_control(cmd_np)
                 env.step_physics()
 
-            if env.update_cloth(right_gripper[t], left_gripper[t]):
-                grasp_frames += 1
+            if cfg.enable_wipe_cloth and right_gripper is not None and left_gripper is not None:
+                if env.update_cloth(right_gripper[t], left_gripper[t]):
+                    grasp_frames += 1
 
             joint_after = env.get_joint_positions()
             err_sq = float(np.mean((joint_after - ground_truth[t]) ** 2))
             tracking_sq_err.append(err_sq)
 
-            if env.cloth is not None:
+            if metrics_rec is not None and getattr(env, "cloth", None) is not None:
                 hand_attach_pose, _ = env.cloth._hand_target_pose()
                 right_id = env.model.body(RIGHT_HAND_BODY).id
                 right_hand_pos = np.asarray(env.data.xpos[right_id], dtype=np.float64)
@@ -372,7 +408,7 @@ class MuJoCoWipeEvaluator:
             stats.tracking_rmse = float(stats.tracking_mse ** 0.5)
 
         stats.grasp_frames = grasp_frames
-        stats.task_metrics = metrics_rec.finalize()
+        stats.task_metrics = metrics_rec.finalize() if metrics_rec is not None else None
 
         if cfg.record_video and video_frames:
             try:
@@ -433,11 +469,15 @@ def _stats_to_report(
     ckpt: Path,
     meta: Dict[str, Any],
     episode_table_top_z: float = TABLE_TOP_Z,
+    task_id: str = "wipe_table",
+    dataset_id: str = DATASET_ID,
+    unnorm_key: str = "g1_wipe_table",
 ) -> Dict[str, Any]:
     return {
         "step": 4,
-        "task": "g1_wipe_table",
-        "dataset_id": DATASET_ID,
+        "task": task_id,
+        "unnorm_key": unnorm_key,
+        "dataset_id": dataset_id,
         "init_episode": episode,
         "control_mode": control_mode,
         "esn_checkpoint": str(ckpt),
@@ -459,8 +499,24 @@ def _stats_to_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 4 MuJoCo wipe-table evaluation")
+    from src.unifolm_tasks import (
+        DEFAULT_TASK_ID,
+        add_task_arg,
+        esn_checkpoint_basename,
+        get_task,
+        maybe_print_tasks_and_exit,
+    )
+    from src.wipe_dataset import resolve_task_episode_spec
+
+    add_task_arg(parser, default=DEFAULT_TASK_ID)
+    parser.add_argument("--dataset", type=str, default=None, help="Override HF dataset id")
     parser.add_argument("--mjcf", type=str, default=None)
-    parser.add_argument("--esn_checkpoint", type=str, default=str(models_path("esn_cuda_ridge")))
+    parser.add_argument(
+        "--esn_checkpoint",
+        type=str,
+        default=None,
+        help="ESN checkpoint dir (default: models/esn_cuda_ridge[_<task>])",
+    )
     parser.add_argument("--episode", type=int, default=None, help="Single episode (legacy)")
     parser.add_argument(
         "--episodes",
@@ -500,15 +556,25 @@ def main() -> None:
     parser.add_argument("--video_fps", type=float, default=VIDEO_FPS)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
+    maybe_print_tasks_and_exit(args)
+    task = get_task(args.task)
+    dataset_id = args.dataset or task.primary_dataset_id
+    if not task.supports_wipe_cloth_metrics:
+        logger.warning(
+            "Task %s: cloth wipe metrics disabled (joint tracking only).",
+            task.id,
+        )
 
     mjcf = resolve_mjcf_path(args.mjcf)
-    ckpt = resolve_esn_checkpoint(args.esn_checkpoint)
+    ckpt = resolve_esn_checkpoint(
+        args.esn_checkpoint or str(models_path(esn_checkpoint_basename(task.id)))
+    )
     meta = load_esn_checkpoint_metadata(ckpt)
 
     if args.episode is not None:
         episodes = [int(args.episode)]
     else:
-        episodes = parse_episode_spec(args.episodes)
+        episodes = resolve_task_episode_spec(args.episodes, dataset_id=dataset_id)
     if args.max_episodes is not None:
         episodes = episodes[: max(0, int(args.max_episodes))]
     tag = split_name_for_episodes(episodes)
@@ -522,7 +588,12 @@ def main() -> None:
     reports: List[Dict[str, Any]] = []
     for ep in episodes:
         record_video = want_video and video_ep is not None and int(ep) == int(video_ep)
-        video_path = RESULTS_DIR / f"table_wipe_ep{ep}_oracle_esn.mp4"
+        video_stem = (
+            f"table_wipe_ep{ep}_oracle_esn"
+            if task.supports_wipe_cloth_metrics
+            else f"{task.id}_ep{ep}_oracle_esn"
+        )
+        video_path = RESULTS_DIR / f"{video_stem}.mp4"
         config = MuJoCoEvalConfig(
             mjcf_path=mjcf,
             esn_checkpoint=str(ckpt),
@@ -536,6 +607,9 @@ def main() -> None:
             video_fps=args.video_fps,
             device=args.device,
             loop_episode=bool(args.loop),
+            dataset_id=dataset_id,
+            task_id=task.id,
+            enable_wipe_cloth=bool(task.supports_wipe_cloth_metrics),
         )
         stats = MuJoCoWipeEvaluator(config).run()
         report = _stats_to_report(
@@ -545,6 +619,9 @@ def main() -> None:
             ckpt=ckpt,
             meta=meta,
             episode_table_top_z=stats.episode_table_top_z,
+            task_id=task.id,
+            dataset_id=dataset_id,
+            unnorm_key=task.unnorm_key,
         )
         ep_path = RESULTS_DIR / f"mujoco_eval_report_ep{ep}.json"
         ep_path.write_text(json.dumps(report, indent=2))
@@ -568,6 +645,9 @@ def main() -> None:
 
     summary = {
         "split": tag,
+        "task": task.id,
+        "unnorm_key": task.unnorm_key,
+        "dataset_id": dataset_id,
         "episodes": episodes,
         "n_episodes": len(episodes),
         "control_mode": args.control_mode,
