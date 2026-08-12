@@ -1,67 +1,38 @@
-{
-  "suite": "UnifoLM G1 single-embodiment ESN bridges",
-  "note": "Wipe row is measured. Other tasks: run on DGX: python3 -m src.step2_esn_cuda_ridge --all_tasks --continue_on_error",
-  "tasks": [
-    {
-      "task_id": "wipe_table",
-      "unnorm_key": "g1_wipe_table",
-      "dataset_id": "unitreerobotics/G1_Dex1_Wipe_Table",
-      "n_train_episodes": 160,
-      "n_heldout_episodes": 40,
-      "heldout_rmse_mean": 0.0027750881633227665,
-      "heldout_rmse_std": 0.0034445573325602376,
-      "status": "ok",
-      "checkpoint_dir": "models/esn_cuda_ridge"
-    },
-    {
-      "task_id": "stack_block",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_stack_block"
-    },
-    {
-      "task_id": "bag_insert",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_bag_insert"
-    },
-    {
-      "task_id": "erase_board",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_erase_board"
-    },
-    {
-      "task_id": "clean_table",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_clean_table"
-    },
-    {
-      "task_id": "pack_pencilbox",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_pack_pencilbox"
-    },
-    {
-      "task_id": "pour_medicine",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_pour_medicine"
-    },
-    {
-      "task_id": "pack_pingpong",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_pack_pingpong"
-    },
-    {
-      "task_id": "prepare_fruit",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_prepare_fruit"
-    },
-    {
-      "task_id": "organize_tools",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_organize_tools"
-    },
-    {
-      "task_id": "fold_towel",
-      "status": "pending",
-      "checkpoint_dir": "models/esn_cuda_ridge_fold_towel"
-    }
-  ]
-}
+[
+  {
+    "task_id": "wipe_table",
+    "unnorm_key": "g1_wipe_table",
+    "dataset_id": "unitreerobotics/G1_Dex1_Wipe_Table",
+    "checkpoint_dir": "/home/aihimekpen/research_summer_2026/research/models/esn_cuda_ridge",
+    "checkpoint_pth": "/home/aihimekpen/research_summer_2026/research/models/esn_cuda_ridge/esn_cuda_ridge_best.pth",
+    "n_train_episodes": 4,
+    "n_heldout_episodes": 2,
+    "train_rmse": 0.00688579141426844,
+    "train_jerk": 1.1643785910564475e-05,
+    "heldout_rmse_mean": 1.9830997538769746,
+    "heldout_rmse_std": 0.005373525755021147,
+    "heldout_jerk_mean": 0.002025758323725313,
+    "leaky_rate": 0.1,
+    "ridge_alpha": 0.01,
+    "step_hz": 2788.5325482831386,
+    "status": "ok"
+  },
+  {
+    "task_id": "fold_towel",
+    "unnorm_key": "g1_fold_towel",
+    "dataset_id": "unitreerobotics/G1_Fold_Towel",
+    "checkpoint_dir": "/home/aihimekpen/research_summer_2026/research/models/esn_cuda_ridge_fold_towel",
+    "checkpoint_pth": "/home/aihimekpen/research_summer_2026/research/models/esn_cuda_ridge_fold_towel/esn_cuda_ridge_best.pth",
+    "n_train_episodes": 4,
+    "n_heldout_episodes": 2,
+    "train_rmse": 0.0203660502949893,
+    "train_jerk": 4.2533858504612e-05,
+    "heldout_rmse_mean": 0.8145820297619919,
+    "heldout_rmse_std": 0.2719307059611616,
+    "heldout_jerk_mean": 0.00041967391734942794,
+    "leaky_rate": 0.1,
+    "ridge_alpha": 0.01,
+    "step_hz": 2769.343798203774,
+    "status": "ok"
+  }
+]

@@ -181,6 +181,15 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
 
 \section{Methodology}
 \subsection{System Architecture}
+Figure~\ref{fig:architecture} summarizes the hybrid stack: UnifoLM emits sparse EE intents, an IK bridge lifts them to 29-D joint targets, and a fixed ESN reservoir with ridge readout produces 100\,Hz commands conditioned on proprioception.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/fig1_architecture.pdf}
+\caption{VLA$+$ESN architecture for Unitree G1 (29\,DoF). UnifoLM-VLA-Base runs at $\sim$1.75\,Hz on a DGX V100; the ESN bridge closes the $\sim$57$\times$ gap to the 100\,Hz joint loop.}
+\label{fig:architecture}
+\end{figure*}
+
 \begin{itemize}
   \item \textbf{Perception / VLA:} \texttt{UnifoLM-VLA-Base} (backbone \texttt{UnifoLM-VLM-Base}) emits \textbf{23-D end-effector} action chunks for G1 wipe/clean tasks (\texttt{g1\_wipe\_table}, \texttt{g1\_clean\_table}, \ldots); a Jacobian \textbf{IK bridge} maps EE poses to 29-D joint targets for the ESN.
   \item \textbf{ESN bridge:} Leaky reservoir update
@@ -207,7 +216,7 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
 \label{sec:dataset}
 All ESN training, offline upsample baselines, and MuJoCo wipe-oracle evaluations use
 \texttt{unitreerobotics/G1\_Dex1\_Wipe\_Table} (Hugging Face \texttt{train} split).
-Table~\ref{tab:dataset} summarizes the corpus.
+Table~\ref{tab:dataset} and Fig.~\ref{fig:dataset} summarize the corpus.
 There are \textbf{200} demonstration episodes ($75{,}909$ frames at $\sim$30\,Hz capture; $\sim$0.70\,h total),
 each lasting roughly $9.9$--$16.8$\,s (mean $12.6$\,s).
 Observations include 29-D whole-body joints (\texttt{observation.body}), bimanual arms/grippers, and EE poses;
@@ -266,6 +275,14 @@ Control / VLA hold (ESN) & 100\,Hz / 2\,Hz (50-tick hold) \\
 \end{tabular}
 \end{table}
 
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig3_dataset_distribution.pdf}
+\caption{Wipe-table data distribution: episode durations and the episode-level 80/20 train ($0$--$159$) / held-out ($160$--$199$) split used for all ESN / baseline / oracle claims.}
+\label{fig:dataset}
+\end{figure}
+\FloatBarrier
+
 \subsection{Setup}
 \begin{itemize}
   \item \textbf{Robot / hardware:} Unitree G1 (29\,DoF); NVIDIA DGX Station, Tesla V100-DGXS-32GB.
@@ -289,8 +306,23 @@ Task success (grasp / wipe contact), joint and right-EE RMSE, trajectory jerk ($
 
 \subsection{Measured Status (5 Aug 2026)}
 Table~\ref{tab:measured} summarizes profiling, multi-episode ESN / offline baselines, live dual-process timing, held-out MuJoCo oracle evaluation, and live UnifoLM wipe-success trials.
+Figures~\ref{fig:latency}--\ref{fig:oracle} visualize the same measured artifacts (no mock priors).
 \mbox{Table~\ref{tab:esn_sweep}} reports the leak$\times$ridge sweep used to select $(\alpha,\lambda)$;
 Table~\ref{tab:offline} reports open-loop held-out upsampling baselines.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig2_latency_gap.pdf}
+\caption{Measured UnifoLM frequency gap (PyTorch $n{=}100$ on \texttt{G1\_Clean\_Table}): mean 570.7\,ms / 1.752\,Hz vs.\ the 100\,Hz G1 budget; live ESN dual-process clears 100\,Hz mean.}
+\label{fig:latency}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig5_hyperparam_sweep.pdf}
+\caption{Leak$\times$ridge sweep on wipe ep.~0 ($N{=}1000$, $\rho{=}0.95$). Selected $(\alpha,\lambda)=(0.3,1)$ (boxed) by RMSE$\times$jerk score; same config used for the 160-episode train.}
+\label{fig:sweep}
+\end{figure}
 
 \noindent
 \begin{minipage}{\columnwidth}
@@ -336,6 +368,34 @@ PID & $7.14\times10^{-2}\!\pm\!1.19\times10^{-2}$ & $\sim$1.4$\times$ linear \\
 \end{tabular}
 \end{minipage}
 
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig4_offline_baselines.pdf}
+\caption{Open-loop held-out RMSE (log scale) matching Table~\ref{tab:offline}: ESN is $\sim$5.6$\times$ lower than linear upsampling on eps $160$--$199$.}
+\label{fig:baselines}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig7_control_rates.pdf}
+\caption{Live dual-process MuJoCo$+$bridge under UnifoLM (10\,s): mean/P99 step latency and achieved control Hz for ZOH, linear, PID, and ESN.}
+\label{fig:rates}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig8_oracle_heldout.pdf}
+\caption{MuJoCo \emph{dataset-oracle} ESN on all 40 held-out wipe episodes: joint RMSE distribution and wipe-path vs.\ table-contact (grasp/task success 100\%; mean contact 74.5\%).}
+\label{fig:oracle}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig6_contact_ladder.pdf}
+\caption{Contact ladder connecting Table~\ref{tab:measured}: oracle demo tokens (74.5\%) vs.\ live UnifoLM without \texttt{press\_table} ($\sim$5\% collapse) vs.\ live ESN/ZOH with the disclosed geometric press prior (100\%).}
+\label{fig:contact}
+\end{figure}
+
 \subsection{Remaining Closed-Loop Study}
 Finish $N$/$\rho$ ablations and complete S2R/DIRT deploy on Jetson$\rightarrow$G1.
 Live UnifoLM wipe trials now report task metrics (Table~\ref{tab:measured}): with a proximity-synthetic Dex1 proxy and a table-plane press prior on the mocap cloth, both ESN and ZOH reach \textbf{100\%} contact and pass task-success gates over 30\,s.
@@ -343,26 +403,26 @@ Dual-process timing remains healthy on average (ESN clears 100\,Hz mean), with G
 
 \section{Discussion and Limitations}
 \paragraph{Frequency gap.}
-Table~\ref{tab:measured} cross-validates the gap with two instruments.
+Table~\ref{tab:measured} and Fig.~\ref{fig:latency} cross-validate the gap with two instruments.
 The latest PyTorch campaign reports \textbf{570.7\,ms / 1.752\,Hz} (std\,10.1\,ms, 0\% parse failure): naive ZOH must hold each VLA target for roughly 57 control ticks at 100\,Hz.
 Nsight NVTX reports \textbf{593.7\,ms} mean ($\approx$1.68\,Hz; $59.4\times$ gap); the $\sim$20\,ms uplift vs.\ wall-clock is consistent with tracing overhead.
 Both profilers attribute GPU time to large GEMMs; Nsight additionally highlights H2D pressure (\texttt{cudaMemcpyAsync}), motivating pinned transfers and keeping the ESN on-device between sparse VLA updates.
 
 \paragraph{Data scope.}
-Table~\ref{tab:dataset} bounds where our model is allowed to ``work'': one wipe task, $\sim$0.7\,h of Dex1 demos, episode-level 80/20 split.
+Table~\ref{tab:dataset} and Fig.~\ref{fig:dataset} bound where our model is allowed to ``work'': one wipe task, $\sim$0.7\,h of Dex1 demos, episode-level 80/20 split.
 Gains on this corpus do not imply multi-task humanoid competence.
 Held-out open-loop and oracle tables in Table~\ref{tab:measured} replace earlier single-episode development numbers for generalization claims.
 
 \paragraph{ESN and control timing.}
-\mbox{Table~\ref{tab:esn_sweep}} shows that ridge strength dominates tracking on wipe ep.~0: $\lambda{=}1$ outperforms weaker regularization, and $(\alpha,\lambda)=(0.3,1)$ reaches \textbf{$9.83\times10^{-4}$\,rad} RMSE with jerk nearly matched to the demonstration (ratio 0.981).
+\mbox{Table~\ref{tab:esn_sweep}} / Fig.~\ref{fig:sweep} show that ridge strength dominates tracking on wipe ep.~0: $\lambda{=}1$ outperforms weaker regularization, and $(\alpha,\lambda)=(0.3,1)$ reaches \textbf{$9.83\times10^{-4}$\,rad} RMSE with jerk nearly matched to the demonstration (ratio 0.981).
 Under-regularized settings inflate RMSE by up to $\sim$60$\times$, so a short ridge sweep is necessary.
-Retraining the readout on all 160 train episodes yields held-out open-loop RMSE \textbf{$2.78\times10^{-3}$\,rad}---about \textbf{5.6$\times$} better than linear upsampling (Table~\ref{tab:offline})---while train-ref ep.~0 RMSE remains $\sim$$1.1\times10^{-3}$\,rad.
+Retraining the readout on all 160 train episodes yields held-out open-loop RMSE \textbf{$2.78\times10^{-3}$\,rad}---about \textbf{5.6$\times$} better than linear upsampling (Table~\ref{tab:offline}, Fig.~\ref{fig:baselines})---while train-ref ep.~0 RMSE remains $\sim$$1.1\times10^{-3}$\,rad.
 Training remains cheap ($\sim$2.75\,kHz on V100), enabling $N$/$\rho$ ablations.
-Under \emph{live} UnifoLM, dual-process ESN mean step is 6.92\,ms (145\,Hz) with steady max 12.6\,ms: the mean clears 100\,Hz, but GPU contention with the VLA produces tails we report rather than hide.
+Under \emph{live} UnifoLM, dual-process ESN mean step is 6.92\,ms (145\,Hz) with steady max 12.6\,ms (Fig.~\ref{fig:rates}): the mean clears 100\,Hz, but GPU contention with the VLA produces tails we report rather than hide.
 Classical bridges (ZOH/linear/PID) stay under 8\,ms steady max in the same live setting.
-The MuJoCo wipe \emph{oracle} on all 40 held-out episodes shows tight joint tracking ($3.00\times10^{-3}$\,rad) with 100\% grasp and 74.5\% mean table contact when demo tokens drive the ESN---so the bridge+scene can wipe when the plan is correct.
+The MuJoCo wipe \emph{oracle} on all 40 held-out episodes (Fig.~\ref{fig:oracle}) shows tight joint tracking ($3.00\times10^{-3}$\,rad) with 100\% grasp and 74.5\% mean table contact when demo tokens drive the ESN---so the bridge+scene can wipe when the plan is correct.
 Matching \emph{live} UnifoLM wipe trials (30\,s, interactive cloth) attach under a proximity-synthetic grasp; without a table-plane press prior the VLA lifts the cloth and contact collapses ($\sim$5\%).
-Enabling \texttt{press\_table} (held cloth follows hand XY on the table surface) restores \textbf{100\%} contact and task success for ESN and ZOH---a geometric wipe prior, not learned press-from-vision.
+Enabling \texttt{press\_table} (held cloth follows hand XY on the table surface) restores \textbf{100\%} contact and task success for ESN and ZOH (Fig.~\ref{fig:contact})---a geometric wipe prior, not learned press-from-vision.
 Orientation IK currently tracks EE position only; UnifoLM EE actions also lack an explicit Dex1 gripper channel.
 
 \section{Conclusion}

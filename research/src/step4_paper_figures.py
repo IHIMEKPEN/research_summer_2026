@@ -1,485 +1,530 @@
 """
-============================================================
-Step 4 — Paper Figures Generator
-Week 13–14 Deliverable: All ICRA-ready Figures
-Research Plan: VLA + ESN for Real-Time Humanoid Control
-Author: Osemudiamen Andrew Ihimekpen | PVAMU CREDIT Center
-============================================================
+Step 4 — ICRA paper figures from *measured* results only (no SUCCESS_PRIORS / mock grids).
 
-Generates all figures for the ICRA 2026 submission:
-  Fig 1: System architecture diagram
-  Fig 2: Latency gap motivation (from Step 1 profiling)
-  Fig 3: 4-method baseline table visualisation (Step 1 results)
-  Fig 4: ESN training convergence and validation (Step 2)
-  Fig 5: Full evaluation across 4 tasks (Step 3)
-  Fig 6: Perturbation robustness curves (Step 3)
-  Fig 7: Ablation heat map (Step 3)
-  Fig 8: Real-time control trace (qualitative)
+Outputs (PDF + PNG) under:
+  research/results/step4_paper_figures/
+  papers/icra2027/figures/   (synced for \includegraphics)
 
-Usage:
-  python step4_paper_figures.py --mock
-  python step4_paper_figures.py   # loads real results from results/
+Figures:
+  fig1_architecture       UnifoLM → IK → ESN → G1 @ 100 Hz
+  fig2_latency_gap        Step-1 PyTorch latency (n=100) + frequency gap
+  fig3_dataset_distribution  Wipe-table episode lengths + train/held-out split
+  fig4_offline_baselines  Held-out open-loop RMSE (ZOH / linear / PID / ESN)
+  fig5_hyperparam_sweep   Leak × ridge heatmap (ep.0 wipe)
+  fig6_contact_ladder     Oracle vs live contact (press_table disclosure)
+  fig7_control_rates      Dual-process live bridge rates
+  fig8_oracle_heldout     MuJoCo oracle RMSE / contact over 40 held-out eps
+
+Usage (from research/):
+  python3 -m src.step4_paper_figures
 """
+
+from __future__ import annotations
 
 import argparse
 import json
 import logging
+import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
-import warnings
+from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import matplotlib.gridspec as gridspec
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
-import matplotlib.patheffects as pe
+import numpy as np
 import pandas as pd
+from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
-warnings.filterwarnings("ignore")
+from src.paths import RESEARCH_ROOT, result_file, results_path
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-from src.paths import result_file, results_path
-
 FIGURES_DIR = results_path("step4_paper_figures")
+PAPER_FIG_DIR = RESEARCH_ROOT.parent / "papers" / "icra2027" / "figures"
 
-# Publication style
+# Frozen Aug-2025/2026 campaign paths (do not use smoke-overwritten latest stubs).
+PROFILE_REPORT = result_file(
+  "step1_profiling_unifolm_vla0",
+  "pytorch_profiler_20260805_140730",
+  "profiling_report.json",
+)
+PROFILE_LOG = result_file(
+  "step1_profiling_unifolm_vla0",
+  "pytorch_profiler_20260805_140730",
+  "inference_log.json",
+)
+DATASET_CARD = result_file("step2_training", "dataset_card_wipe_table.json")
+ESN_SEED = result_file("step2_training", "esn_task_registry_seed.json")
+SWEEP_CSV = result_file("step2_training", "esn_hyperparam_sweep.csv")
+BASELINE_JSON = result_file("step3_baselines", "baseline_comparison_summary.json")
+DUAL_CSV = result_file("step3_dual_thread", "dual_thread_summary_all_live.csv")
+LIVE_ESN = result_file("step3_live_wipe", "live_wipe_report_esn_live.json")
+LIVE_ZOH = result_file("step3_live_wipe", "live_wipe_report_zoh_live.json")
+MUJOCO_CSV = result_file("step4_mujoco_evaluation", "mujoco_eval_summary_heldout.csv")
+MUJOCO_JSON = result_file("step4_mujoco_evaluation", "mujoco_eval_summary_heldout.json")
+
 plt.rcParams.update({
-    "font.family": "sans-serif",
-    "font.size": 10,
-    "axes.titlesize": 10,
-    "axes.labelsize": 9,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
-    "legend.fontsize": 8,
-    "figure.dpi": 150,
-    "savefig.dpi": 300,
-    "savefig.bbox": "tight",
-    "axes.spines.top": False,
-    "axes.spines.right": False,
+  "font.family": "serif",
+  "font.size": 9,
+  "axes.titlesize": 10,
+  "axes.labelsize": 9,
+  "xtick.labelsize": 8,
+  "ytick.labelsize": 8,
+  "legend.fontsize": 8,
+  "figure.dpi": 150,
+  "savefig.dpi": 300,
+  "savefig.bbox": "tight",
+  "axes.spines.top": False,
+  "axes.spines.right": False,
 })
 
-METHOD_COLORS = {
-    "pure_openvla": "#EF5350",
-    "vla_pid":      "#FF9800",
-    "vla_lstm":     "#42A5F5",
-    "vla_esn":      "#2E7D32",
-}
-METHOD_LABELS = {
-    "pure_openvla": "Pure OpenVLA",
-    "vla_pid":      "VLA + PID",
-    "vla_lstm":     "VLA + LSTM",
-    "vla_esn":      "VLA + ESN (Ours)",
+COLORS = {
+  "vla": "#C62828",
+  "esn": "#2E7D32",
+  "zoh": "#EF6C00",
+  "linear": "#1565C0",
+  "pid": "#6A1B9A",
+  "req": "#424242",
+  "train": "#1565C0",
+  "heldout": "#C62828",
 }
 
 
-# ── Fig 1: System Architecture ────────────────────────────────
-def fig1_architecture():
-    fig, ax = plt.subplots(figsize=(12, 4.5))
-    ax.set_xlim(0, 12); ax.set_ylim(0, 4.5); ax.axis("off")
-    fig.patch.set_facecolor("white")
-
-    def box(ax, x, y, w, h, label, sublabel, color, fontsize=9):
-        rect = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.1",
-                              linewidth=1.5, edgecolor=color,
-                              facecolor=color + "22" if len(color) == 7 else color)
-        ax.add_patch(rect)
-        ax.text(x + w/2, y + h*0.62, label, ha="center", va="center",
-                fontsize=fontsize, fontweight="bold", color=color)
-        ax.text(x + w/2, y + h*0.28, sublabel, ha="center", va="center",
-                fontsize=7, color="#555555")
-
-    def arrow(ax, x1, y1, x2, y2, label="", color="#444444"):
-        ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
-                    arrowprops=dict(arrowstyle="-|>", lw=1.8, color=color))
-        if label:
-            mx, my = (x1+x2)/2, (y1+y2)/2 + 0.15
-            ax.text(mx, my, label, ha="center", fontsize=7.5, color=color, style="italic")
-
-    # Camera
-    box(ax, 0.2, 1.5, 1.6, 1.5, "Camera", "RGB 224×224", "#1976D2")
-    # Language
-    box(ax, 0.2, 0.1, 1.6, 1.1, "Language\nGoal", '"Pick up\nred cube"', "#7B1FA2")
-
-    # OpenVLA
-    box(ax, 2.3, 0.8, 2.0, 2.0, "OpenVLA 7B", "LLaMA + ViT\n~3 Hz / 380 ms", "#C62828")
-    arrow(ax, 1.8, 2.25, 2.3, 2.25, "image")
-    arrow(ax, 1.8, 0.65, 2.3, 1.3, "text")
-
-    # Hidden state
-    ax.text(4.55, 2.35, "h_t ∈ ℝ⁴⁰⁹⁶", fontsize=7.5, color="#C62828",
-            style="italic", ha="center")
-    arrow(ax, 4.3, 1.8, 5.1, 1.8, "3 Hz")
-
-    # ESN Reservoir
-    box(ax, 5.1, 0.6, 2.2, 2.4, "ESN Reservoir", "N=1000 neurons\nρ=0.95 | fixed W", "#2E7D32")
-
-    # W_out
-    box(ax, 7.7, 1.0, 1.5, 1.6, "W_out", "Ridge regression\ntrained offline", "#1565C0")
-    arrow(ax, 7.3, 1.8, 7.7, 1.8, "x(t)")
-
-    # 100 Hz output
-    box(ax, 9.6, 1.0, 2.1, 1.6, "G1 Commands", "29 DOF joints\n100 Hz / 8 ms", "#E65100")
-    arrow(ax, 9.2, 1.8, 9.6, 1.8, "100 Hz", color="#2E7D32")
-
-    # Feedback loop
-    ax.annotate("", xy=(6.2, 0.6), xytext=(6.2, 0.3),
-                arrowprops=dict(arrowstyle="-|>", lw=1.2, color="#888888"))
-    ax.annotate("", xy=(9.1, 0.3), xytext=(6.2, 0.3),
-                arrowprops=dict(arrowstyle="-", lw=1.2, color="#888888"))
-    ax.annotate("", xy=(9.1, 0.3), xytext=(9.1, 1.0),
-                arrowprops=dict(arrowstyle="-|>", lw=1.2, color="#888888"))
-    ax.text(7.65, 0.12, "y(t-1) feedback (optional)", ha="center", fontsize=7, color="#888888")
-
-    # Frequency annotation
-    ax.text(3.3, 4.15,
-            "Problem: OpenVLA at 3.2 Hz vs G1 requirement 100 Hz → 31× gap",
-            fontsize=8.5, color="#C62828", ha="center",
-            bbox=dict(facecolor="#FFEBEE", edgecolor="#C62828", boxstyle="round,pad=0.3"))
-    ax.text(8.0, 4.15,
-            "Solution: ESN bridge fills 100 Hz at < 1 ms overhead",
-            fontsize=8.5, color="#2E7D32", ha="center",
-            bbox=dict(facecolor="#E8F5E9", edgecolor="#2E7D32", boxstyle="round,pad=0.3"))
-
-    ax.set_title("Fig 1 — VLA + ESN System Architecture for Real-Time Humanoid Control",
-                 fontsize=11, fontweight="bold", pad=10)
-
-    out = FIGURES_DIR / "fig1_architecture.pdf"
-    plt.savefig(out); plt.savefig(str(out).replace(".pdf", ".png"))
-    plt.close(); logger.info(f"Saved: {out}")
+def _load_json(path: Path) -> Dict[str, Any]:
+  with open(path) as f:
+    return json.load(f)
 
 
-# ── Fig 2: Latency Gap Motivation ─────────────────────────────
-def fig2_latency_gap(mock: bool = True):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-
-    # Load or mock data
-    if not mock:
-        try:
-            with open(result_file("step1_profiling", "profiling_report.json")) as f:
-                report = json.load(f)
-            mean_lat  = report["mean_latency_ms"]
-            p95_lat   = report["p95_latency_ms"]
-            mean_hz   = report["mean_hz"]
-            freq_gap  = report["frequency_gap"]
-        except Exception:
-            mock = True
-
-    if mock:
-        rng = np.random.default_rng(42)
-        latencies = rng.normal(382, 25, 100)
-        mean_lat  = latencies.mean()
-        p95_lat   = np.percentile(latencies, 95)
-        mean_hz   = 1000.0 / mean_lat
-        freq_gap  = 100.0 / mean_hz
-    else:
-        rng = np.random.default_rng(42)
-        latencies = rng.normal(mean_lat, 25, 100)
-
-    # Left: latency distribution
-    ax = axes[0]
-    ax.hist(latencies, bins=20, color="#EF5350", edgecolor="white", alpha=0.85, density=True)
-    ax.axvline(mean_lat, color="darkred", ls="--", lw=2, label=f"Mean = {mean_lat:.0f} ms")
-    ax.axvline(p95_lat,  color="orange",  ls=":",  lw=2, label=f"P95  = {p95_lat:.0f} ms")
-    ax.axvline(10,       color="#2E7D32", ls="-",  lw=2, label="ESN target ≤ 10 ms")
-    ax.set_xlabel("Inference Latency (ms)")
-    ax.set_ylabel("Density")
-    ax.set_title("(a) OpenVLA Latency Distribution")
-    ax.legend()
-
-    # Right: frequency comparison bar
-    ax2 = axes[1]
-    methods = ["OpenVLA\n(baseline)", "G1\nRequired", "VLA+ESN\n(Ours)"]
-    freqs   = [mean_hz, 100.0, 104.0]
-    colors  = ["#EF5350", "#555555", "#2E7D32"]
-    bars = ax2.bar(methods, freqs, color=colors, edgecolor="white", lw=1.5, width=0.5)
-    ax2.axhline(100, color="#555555", ls="--", lw=1.5, alpha=0.5)
-    for bar, val in zip(bars, freqs):
-        ax2.text(bar.get_x() + bar.get_width()/2, val + 1, f"{val:.1f} Hz",
-                 ha="center", va="bottom", fontsize=9, fontweight="bold")
-    ax2.set_ylabel("Control Frequency (Hz)")
-    ax2.set_title(f"(b) Frequency Gap: {freq_gap:.0f}× below G1 requirement")
-    ax2.set_ylim(0, 120)
-
-    fig.suptitle("Fig 2 — The Frequency Gap Problem and ESN Solution", fontweight="bold")
-    fig.tight_layout()
-
-    out = FIGURES_DIR / "fig2_latency_gap.pdf"
-    plt.savefig(out); plt.savefig(str(out).replace(".pdf", ".png"))
-    plt.close(); logger.info(f"Saved: {out}")
+def _save(fig: plt.Figure, stem: str) -> Path:
+  FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+  PAPER_FIG_DIR.mkdir(parents=True, exist_ok=True)
+  pdf = FIGURES_DIR / f"{stem}.pdf"
+  png = FIGURES_DIR / f"{stem}.png"
+  fig.savefig(pdf)
+  fig.savefig(png)
+  plt.close(fig)
+  for ext in (".pdf", ".png"):
+    shutil.copy2(FIGURES_DIR / f"{stem}{ext}", PAPER_FIG_DIR / f"{stem}{ext}")
+  logger.info("Saved %s (+ paper sync)", pdf)
+  return pdf
 
 
-# ── Fig 3: Baseline Comparison ────────────────────────────────
-def fig3_baselines(mock: bool = True):
-    if not mock:
-        try:
-            df = pd.read_csv(result_file("step1_baselines", "baseline_table.csv"))
-        except Exception:
-            mock = True
-
-    if mock:
-        # Reproduce Step 1 mock results
-        rows = []
-        for task in ["Pick And Place", "Corridor Navigation"]:
-            for method, label, success, hz in [
-                ("pure_openvla", "Pure OpenVLA",      31.0, 3.2),
-                ("vla_pid",      "VLA + PID",         41.0, 3.2),
-                ("vla_lstm",     "VLA + LSTM",        55.0, 3.2),
-                ("vla_esn",      "VLA + ESN (Ours)", 84.0, 104.0),
-            ]:
-                rows.append({"Task": task, "Method": label, "method_key": method,
-                             "success": success, "hz": hz})
-        df = pd.DataFrame(rows)
-
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-    tasks = df["Task"].unique() if "Task" in df.columns else ["Pick And Place", "Corridor Navigation"]
-
-    for ax, task in zip(axes, tasks):
-        sub = df[df["Task"] == task] if "Task" in df.columns else df
-        methods = [r for r in ["Pure OpenVLA", "VLA + PID", "VLA + LSTM", "VLA + ESN (Ours)"]
-                   if r in sub["Method"].values]
-        colors = [METHOD_COLORS[k] for k in ["pure_openvla", "vla_pid", "vla_lstm", "vla_esn"]
-                  if METHOD_LABELS[k] in methods]
-
-        successes = [sub[sub["Method"] == m]["success"].values[0] for m in methods]
-        ax.bar(range(len(methods)), successes, color=colors, edgecolor="white", lw=1.5)
-
-        for i, (m, s) in enumerate(zip(methods, successes)):
-            ax.text(i, s + 1, f"{s:.0f}%", ha="center", fontsize=8.5, fontweight="bold")
-            if "ESN" in m:
-                ax.text(i, s + 5, "★", ha="center", fontsize=12, color="#2E7D32")
-
-        ax.set_ylim(0, 100)
-        ax.set_xticks(range(len(methods)))
-        ax.set_xticklabels([m.replace(" ", "\n") for m in methods], fontsize=8)
-        ax.set_ylabel("Task Success Rate (%)")
-        ax.set_title(f"(a) {task}" if ax == axes[0] else f"(b) {task}")
-        ax.grid(axis="y", alpha=0.3)
-
-    patches = [mpatches.Patch(color=v, label=l)
-               for k, (v, l) in zip(METHOD_COLORS.keys(),
-                                     zip(METHOD_COLORS.values(), METHOD_LABELS.values()))]
-    fig.legend(handles=patches, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.06))
-    fig.suptitle("Fig 3 — 4-Method Baseline Comparison (Step 1 Results)", fontweight="bold")
-    fig.tight_layout(rect=[0, 0.06, 1, 1])
-
-    out = FIGURES_DIR / "fig3_baselines.pdf"
-    plt.savefig(out); plt.savefig(str(out).replace(".pdf", ".png"))
-    plt.close(); logger.info(f"Saved: {out}")
+def _esn_wipe_metrics() -> Dict[str, float]:
+  """Prefer seeded paper wipe row; never use smoke-overwritten registry."""
+  seed = _load_json(ESN_SEED)
+  wipe = seed.get("wipe_table", seed) if isinstance(seed, dict) else {}
+  return {
+    "heldout_rmse_mean": float(wipe["heldout_rmse_mean"]),
+    "heldout_rmse_std": float(wipe["heldout_rmse_std"]),
+    "train_rmse": float(wipe.get("train_rmse", float("nan"))),
+  }
 
 
-# ── Fig 5: Full Evaluation ─────────────────────────────────────
-def fig5_full_evaluation(mock: bool = True):
-    tasks = ["Pick And Place", "Corridor Nav", "Stair Climbing", "Door Opening"]
-    methods_k = ["pure_openvla", "vla_pid", "vla_lstm", "vla_esn"]
-    rng = np.random.default_rng(7)
+# ── Fig 1: Architecture ───────────────────────────────────────
+def fig1_architecture() -> Path:
+  fig, ax = plt.subplots(figsize=(7.2, 2.6))
+  ax.set_xlim(0, 14)
+  ax.set_ylim(0, 5)
+  ax.axis("off")
+  fig.patch.set_facecolor("white")
 
-    success_data = {
-        "pure_openvla": [30.0, 25.0, 18.0, 22.0],
-        "vla_pid":      [43.0, 37.0, 26.0, 35.0],
-        "vla_lstm":     [55.0, 48.0, 38.0, 46.0],
-        "vla_esn":      [87.0, 82.0, 76.0, 80.0],
-    }
-    ci_data = {m: [rng.uniform(3, 6) for _ in tasks] for m in methods_k}
-
-    fig, ax = plt.subplots(figsize=(11, 5))
-    x = np.arange(len(tasks))
-    width = 0.20
-
-    for i, method in enumerate(methods_k):
-        offset = (i - 1.5) * width
-        vals = success_data[method]
-        errs = ci_data[method]
-        bars = ax.bar(x + offset, vals, width, color=METHOD_COLORS[method],
-                      label=METHOD_LABELS[method], edgecolor="white", lw=1.2,
-                      yerr=errs, capsize=3, error_kw={"ecolor": "black", "lw": 1.2})
-        if method == "vla_esn":
-            for j, (b, v, e) in enumerate(zip(bars, vals, errs)):
-                ax.text(b.get_x() + b.get_width()/2, v + e + 1.5, "★",
-                        ha="center", fontsize=10, color="#2E7D32")
-
-    ax.set_xticks(x); ax.set_xticklabels(tasks)
-    ax.set_ylim(0, 100); ax.set_ylabel("Task Success Rate (%)")
-    ax.set_title("Fig 5 — Full Evaluation: 4 Tasks × 4 Methods × 100 Trials",
-                 fontweight="bold")
-    ax.legend(ncol=4, loc="upper right", fontsize=8)
-    ax.grid(axis="y", alpha=0.3); ax.set_axisbelow(True)
-
-    out = FIGURES_DIR / "fig5_full_evaluation.pdf"
-    plt.savefig(out); plt.savefig(str(out).replace(".pdf", ".png"))
-    plt.close(); logger.info(f"Saved: {out}")
-
-
-# ── Fig 6: Perturbation Robustness ────────────────────────────
-def fig6_robustness(mock: bool = True):
-    pert_levels = [0.0, 0.1, 0.2, 0.4, 0.8]
-    rng = np.random.default_rng(13)
-
-    baselines = {
-        "pure_openvla": [30.0, 22.0, 15.0,  8.0,  3.0],
-        "vla_pid":      [43.0, 35.0, 26.0, 14.0,  6.0],
-        "vla_lstm":     [55.0, 46.0, 36.0, 22.0, 10.0],
-        "vla_esn":      [87.0, 82.0, 75.0, 63.0, 45.0],
-    }
-
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-    for ax_idx, task_label in enumerate(["Pick-and-Place", "Corridor Navigation"]):
-        ax = axes[ax_idx]
-        noise = rng.uniform(-3, 3, (4, len(pert_levels)))
-        for i, method in enumerate(["pure_openvla", "vla_pid", "vla_lstm", "vla_esn"]):
-            ys = np.array(baselines[method]) + noise[i]
-            ys = np.clip(ys, 0, 100)
-            ci = rng.uniform(2, 5, len(pert_levels))
-            ls = "-" if method == "vla_esn" else "--"
-            lw = 2.5 if method == "vla_esn" else 1.5
-            ax.plot(pert_levels, ys, color=METHOD_COLORS[method], ls=ls, lw=lw,
-                    marker="o", markersize=6, label=METHOD_LABELS[method])
-            ax.fill_between(pert_levels, ys - ci, ys + ci,
-                            color=METHOD_COLORS[method], alpha=0.10)
-
-        ax.set_xlabel("Perturbation Level"); ax.set_ylabel("Success Rate (%)")
-        ax.set_title(f"({'ab'[ax_idx]}) {task_label}"); ax.set_ylim(0, 100)
-        ax.legend(fontsize=7); ax.grid(alpha=0.3)
-
-    fig.suptitle("Fig 6 — Perturbation Robustness Analysis", fontweight="bold")
-    fig.tight_layout()
-
-    out = FIGURES_DIR / "fig6_robustness.pdf"
-    plt.savefig(out); plt.savefig(str(out).replace(".pdf", ".png"))
-    plt.close(); logger.info(f"Saved: {out}")
-
-
-# ── Fig 7: Ablation Heatmap ────────────────────────────────────
-def fig7_ablation_heatmap(mock: bool = True):
-    if not mock:
-        try:
-            df = pd.read_csv(result_file("step3_ablation", "ablation_reservoir_size.csv"))
-        except Exception:
-            mock = True
-
-    rng = np.random.default_rng(99)
-    Ns = [100, 200, 500, 1000, 2000]
-    rhos = [0.70, 0.80, 0.90, 0.95, 0.99]
-    # RMSE grid: lower is better; N=1000, ρ=0.95 is optimal
-    grid = np.array([
-        [0.045, 0.038, 0.031, 0.028, 0.033],
-        [0.035, 0.029, 0.024, 0.020, 0.025],
-        [0.028, 0.022, 0.017, 0.013, 0.018],
-        [0.024, 0.018, 0.012, 0.009, 0.015],
-        [0.023, 0.017, 0.012, 0.010, 0.016],
-    ]) + rng.normal(0, 0.001, (5, 5))
-
-    fig, ax = plt.subplots(figsize=(7, 5.5))
-    im = ax.imshow(grid, cmap="RdYlGn_r", aspect="auto",
-                   vmin=grid.min(), vmax=grid.max())
-    plt.colorbar(im, ax=ax, label="Val RMSE (rad)")
-
-    ax.set_xticks(range(len(rhos))); ax.set_xticklabels(rhos)
-    ax.set_yticks(range(len(Ns))); ax.set_yticklabels(Ns)
-    ax.set_xlabel("Spectral Radius ρ"); ax.set_ylabel("Reservoir Size N")
-    ax.set_title("Fig 7 — Ablation: N × ρ Interaction\n(lower RMSE = better)",
-                 fontweight="bold")
-
-    # Annotate best
-    best_i, best_j = np.unravel_index(grid.argmin(), grid.shape)
-    ax.add_patch(plt.Rectangle((best_j - 0.5, best_i - 0.5), 1, 1,
-                                fill=False, edgecolor="blue", lw=3))
-    ax.text(best_j, best_i, "★ best", ha="center", va="center",
-            fontsize=9, color="blue", fontweight="bold")
-
-    for i in range(len(Ns)):
-        for j in range(len(rhos)):
-            ax.text(j, i, f"{grid[i,j]:.3f}", ha="center", va="center", fontsize=7.5)
-
-    fig.tight_layout()
-
-    out = FIGURES_DIR / "fig7_ablation_heatmap.pdf"
-    plt.savefig(out); plt.savefig(str(out).replace(".pdf", ".png"))
-    plt.close(); logger.info(f"Saved: {out}")
-
-
-# ── Fig 8: Real-time control trace ────────────────────────────
-def fig8_control_trace():
-    rng = np.random.default_rng(0)
-    T = 500   # 5 seconds at 100 Hz
-    t = np.arange(T) / 100.0
-
-    # Ground truth smooth trajectory (3 joints)
-    gt = np.column_stack([
-        0.5 * np.sin(2*np.pi*0.4*t),
-        0.3 * np.cos(2*np.pi*0.3*t + 0.5),
-        0.4 * np.sin(2*np.pi*0.2*t + 1.0),
-    ])
-
-    # VLA-only: step-holds at 3.2 Hz
-    vla_indices = np.arange(0, T, int(100 / 3.2))
-    vla_signal = np.zeros_like(gt)
-    for i, idx in enumerate(vla_indices):
-        end = vla_indices[i+1] if i+1 < len(vla_indices) else T
-        vla_signal[idx:end] = gt[idx] + rng.normal(0, 0.04, 3)
-
-    # ESN: smooth interpolation
-    esn_signal = gt + rng.normal(0, 0.008, gt.shape)
-    # Small lag
-    esn_signal[5:] = esn_signal[:-5]
-
-    fig, axes = plt.subplots(3, 1, figsize=(12, 7), sharex=True)
-    joint_names = ["Hip Roll", "Knee Pitch", "Ankle Pitch"]
-
-    for i, (ax, jname) in enumerate(zip(axes, joint_names)):
-        ax.plot(t, gt[:, i], "k-", lw=2, alpha=0.8, label="Ground Truth" if i==0 else "")
-        ax.plot(t, vla_signal[:, i], color="#EF5350", lw=1.5, ls="--", alpha=0.9,
-                label="Pure OpenVLA (3.2 Hz step-hold)" if i==0 else "")
-        ax.plot(t, esn_signal[:, i], color="#2E7D32", lw=1.5, alpha=0.9,
-                label="VLA + ESN (100 Hz)" if i==0 else "")
-        ax.set_ylabel(f"{jname}\n(rad)")
-        ax.grid(alpha=0.3)
-        # Mark VLA update instants
-        for idx in vla_indices[:15]:
-            ax.axvline(idx/100, color="#EF5350", alpha=0.15, lw=0.8)
-
-    axes[-1].set_xlabel("Time (s)")
-    fig.legend(loc="upper right", bbox_to_anchor=(0.98, 0.98), fontsize=8.5)
-    fig.suptitle(
-        "Fig 8 — Real-Time Control Trace: VLA+ESN vs Pure OpenVLA\n"
-        "ESN bridges 100 Hz between VLA ticks (red dashes = VLA update instants)",
-        fontweight="bold"
+  def box(x, y, w, h, title, sub, color):
+    ax.add_patch(
+      FancyBboxPatch(
+        (x, y), w, h, boxstyle="round,pad=0.08",
+        linewidth=1.4, edgecolor=color, facecolor=color + "22",
+      )
     )
-    fig.tight_layout()
+    ax.text(x + w / 2, y + h * 0.62, title, ha="center", va="center",
+            fontsize=8.5, fontweight="bold", color=color)
+    ax.text(x + w / 2, y + h * 0.28, sub, ha="center", va="center",
+            fontsize=6.5, color="#444444")
 
-    out = FIGURES_DIR / "fig8_control_trace.pdf"
-    plt.savefig(out); plt.savefig(str(out).replace(".pdf", ".png"))
-    plt.close(); logger.info(f"Saved: {out}")
+  def arrow(x1, y1, x2, y2, label="", color="#333333"):
+    ax.annotate(
+      "", xy=(x2, y2), xytext=(x1, y1),
+      arrowprops=dict(arrowstyle="-|>", lw=1.5, color=color),
+    )
+    if label:
+      ax.text((x1 + x2) / 2, (y1 + y2) / 2 + 0.22, label,
+              ha="center", fontsize=6.5, color=color, style="italic")
+
+  box(0.15, 2.6, 2.0, 1.5, "RGB + lang", "G1 camera\ninstruction", "#1565C0")
+  box(0.15, 0.4, 2.0, 1.5, "Proprio q_t", "29-DoF joints\n@ 100 Hz", "#455A64")
+  box(2.6, 1.5, 2.4, 2.2, "UnifoLM-VLA", "Base · FP16\n~1.75 Hz / 571 ms", COLORS["vla"])
+  arrow(2.15, 3.3, 2.6, 3.0, "image")
+  arrow(2.15, 1.1, 2.6, 2.0, "text")
+  box(5.4, 1.7, 1.9, 1.8, "IK bridge", "EE chunk →\n29-D q*", "#6A1B9A")
+  arrow(5.0, 2.6, 5.4, 2.6, "~1.7 Hz")
+  box(7.7, 1.4, 2.5, 2.4, "ESN reservoir", "N=1000, ρ=0.95\nu=[q;q*]∈R⁵⁸\nridge W_out", COLORS["esn"])
+  arrow(7.3, 2.6, 7.7, 2.6, "held q*")
+  arrow(2.15, 0.9, 7.7, 1.8, "q_t", color="#455A64")
+  box(10.7, 1.6, 2.9, 2.0, "G1 commands", "29-DoF targets\n100 Hz (≤10 ms)", COLORS["req"])
+  arrow(10.2, 2.6, 10.7, 2.6, "100 Hz", color=COLORS["esn"])
+
+  ax.text(
+    7.0, 4.55,
+    "Frequency gap: UnifoLM ~1.75 Hz  →  ESN bridge  →  G1 100 Hz  (~57×)",
+    ha="center", fontsize=8, color=COLORS["vla"],
+    bbox=dict(facecolor="#FFEBEE", edgecolor=COLORS["vla"], boxstyle="round,pad=0.25"),
+  )
+  ax.set_title("VLA + ESN hybrid control for Unitree G1 (29-DoF)", fontweight="bold", pad=6)
+  return _save(fig, "fig1_architecture")
 
 
-# ── Main ──────────────────────────────────────────────────────
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mock", action="store_true")
-    args = parser.parse_args()
+# ── Fig 2: Latency gap ────────────────────────────────────────
+def fig2_latency_gap() -> Path:
+  report = _load_json(PROFILE_REPORT)
+  log = _load_json(PROFILE_LOG)
+  latencies = np.array([r["latency_ms"] for r in log], dtype=float)
+  mean_lat = float(report["mean_latency_ms"])
+  p95 = float(report["p95_latency_ms"])
+  mean_hz = float(report["mean_hz"])
+  gap = float(report["frequency_gap"])
+  dual = pd.read_csv(DUAL_CSV)
+  esn_hz = float(dual.loc[dual["bridge"] == "esn", "achieved_control_hz"].iloc[0])
 
-    logger.info("=" * 60)
-    logger.info("  Step 4 — Paper Figures | Week 13–14 Deliverable")
-    logger.info("=" * 60)
+  fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
+  ax = axes[0]
+  ax.hist(latencies, bins=18, color=COLORS["vla"], edgecolor="white", alpha=0.9)
+  ax.axvline(mean_lat, color="darkred", ls="--", lw=1.8, label=f"Mean {mean_lat:.1f} ms")
+  ax.axvline(p95, color="#EF6C00", ls=":", lw=1.8, label=f"P95 {p95:.1f} ms")
+  ax.axvline(10.0, color=COLORS["esn"], ls="-", lw=1.6, label="10 ms (100 Hz)")
+  ax.set_xlabel("UnifoLM inference latency (ms)")
+  ax.set_ylabel("Count (n=100)")
+  ax.set_title("(a) Live UnifoLM-VLA-Base (G1_Clean_Table)")
+  ax.legend(fontsize=7, loc="upper left")
 
-    fig1_architecture()
-    fig2_latency_gap(mock=args.mock)
-    fig3_baselines(mock=args.mock)
-    fig5_full_evaluation(mock=args.mock)
-    fig6_robustness(mock=args.mock)
-    fig7_ablation_heatmap(mock=args.mock)
-    fig8_control_trace()
+  ax2 = axes[1]
+  labels = ["UnifoLM\n(PyTorch)", "G1\nrequired", "Live ESN\nbridge"]
+  vals = [mean_hz, 100.0, esn_hz]
+  colors = [COLORS["vla"], COLORS["req"], COLORS["esn"]]
+  bars = ax2.bar(labels, vals, color=colors, edgecolor="white", width=0.55)
+  ax2.axhline(100, color=COLORS["req"], ls="--", lw=1.0, alpha=0.5)
+  for b, v in zip(bars, vals):
+    ax2.text(b.get_x() + b.get_width() / 2, v + 2.5, f"{v:.1f} Hz",
+             ha="center", fontsize=8, fontweight="bold")
+  ax2.set_ylabel("Rate (Hz)")
+  ax2.set_ylim(0, max(vals) * 1.2)
+  ax2.set_title(f"(b) Frequency gap ≈ {gap:.0f}× vs 100 Hz")
 
-    print("\n" + "=" * 60)
-    print("  ALL PAPER FIGURES GENERATED")
-    print("=" * 60)
-    figs = list(FIGURES_DIR.glob("*.pdf"))
-    for f in sorted(figs):
-        print(f"  {f.name}")
-    print(f"\n  Output: {FIGURES_DIR.resolve()}")
-    print("=" * 60)
+  fig.suptitle("Measured frequency gap on DGX V100", fontweight="bold", y=1.02)
+  fig.tight_layout()
+  return _save(fig, "fig2_latency_gap")
+
+
+# ── Fig 3: Dataset distribution ───────────────────────────────
+def fig3_dataset_distribution() -> Path:
+  card = _load_json(DATASET_CARD)
+  durs = np.array(list(card["duration_per_episode_s"].values()), dtype=float)
+  frames = np.array(list(card["frames_per_episode"].values()), dtype=float)
+  split = card["recommended_split"]
+  n_train = len(split["train_episodes"])
+  n_hold = len(split["heldout_episodes"])
+
+  fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
+  ax = axes[0]
+  ax.hist(durs[:n_train], bins=16, color=COLORS["train"], alpha=0.85,
+          edgecolor="white", label=f"Train 0–159 (n={n_train})")
+  ax.hist(durs[n_train:], bins=10, color=COLORS["heldout"], alpha=0.75,
+          edgecolor="white", label=f"Held-out 160–199 (n={n_hold})")
+  ax.axvline(durs.mean(), color="#333", ls="--", lw=1.2,
+             label=f"Mean {durs.mean():.1f} s")
+  ax.set_xlabel("Episode duration (s)")
+  ax.set_ylabel("Count")
+  ax.set_title("(a) G1_Dex1_Wipe_Table episode lengths")
+  ax.legend(fontsize=7)
+
+  ax2 = axes[1]
+  cats = ["Episodes", "Frames\n(×10³)", "Duration\n(min)"]
+  train_vals = [
+    n_train,
+    split["train_frames"] / 1000.0,
+    (durs[:n_train].sum() / 60.0),
+  ]
+  hold_vals = [
+    n_hold,
+    split["heldout_frames"] / 1000.0,
+    (durs[n_train:].sum() / 60.0),
+  ]
+  x = np.arange(len(cats))
+  w = 0.38
+  b1 = ax2.bar(x - w / 2, train_vals, w, color=COLORS["train"], label="Train", edgecolor="white")
+  b2 = ax2.bar(x + w / 2, hold_vals, w, color=COLORS["heldout"], label="Held-out", edgecolor="white")
+  for bars in (b1, b2):
+    for b in bars:
+      ax2.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.5,
+               f"{b.get_height():.1f}", ha="center", fontsize=7)
+  ax2.set_xticks(x)
+  ax2.set_xticklabels(cats)
+  ax2.set_ylabel("Value")
+  ax2.set_title("(b) Episode-level 80/20 split (no frame shuffle)")
+  ax2.legend(fontsize=7)
+  ax2.set_ylim(0, max(train_vals) * 1.25)
+
+  total_h = float(card["total_hours"])
+  fig.suptitle(
+    f"Wipe-table corpus: {card['n_episodes']} eps, {card['num_rows']:,} frames, "
+    f"~{total_h:.2f} h @ ~{card['fps_estimate']:.0f} Hz",
+    fontweight="bold", y=1.02,
+  )
+  fig.tight_layout()
+  return _save(fig, "fig3_dataset_distribution")
+
+
+# ── Fig 4: Offline baselines ──────────────────────────────────
+def fig4_offline_baselines() -> Path:
+  rows = _load_json(BASELINE_JSON)
+  esn = _esn_wipe_metrics()
+  methods = ["zoh", "linear", "pid", "esn"]
+  labels = ["ZOH", "Linear", "PID", "ESN (ours)"]
+  means, stds, colors = [], [], []
+  lookup = {r["method"]: r for r in rows}
+  for m, c in zip(methods, [COLORS["zoh"], COLORS["linear"], COLORS["pid"], COLORS["esn"]]):
+    if m == "esn":
+      means.append(esn["heldout_rmse_mean"])
+      stds.append(esn["heldout_rmse_std"])
+    else:
+      means.append(float(lookup[m]["rmse_mean"]))
+      stds.append(float(lookup[m]["rmse_std"]))
+    colors.append(c)
+
+  fig, ax = plt.subplots(figsize=(4.8, 3.0))
+  x = np.arange(len(labels))
+  bars = ax.bar(x, means, yerr=stds, color=colors, edgecolor="white",
+                capsize=4, error_kw={"lw": 1.2})
+  ax.set_xticks(x)
+  ax.set_xticklabels(labels)
+  ax.set_ylabel("Held-out joint RMSE (rad)")
+  ax.set_title("Open-loop upsample RMSE (40 held-out wipe eps)")
+  ax.set_yscale("log")
+  for b, m, s in zip(bars, means, stds):
+    ax.text(b.get_x() + b.get_width() / 2, m * 1.25,
+            f"{m:.2e}", ha="center", fontsize=7)
+  lin = means[1]
+  ax.annotate(
+    f"ESN ≈ {lin / means[3]:.1f}× vs linear",
+    xy=(3, means[3]), xytext=(1.2, means[0] * 0.55),
+    fontsize=8, color=COLORS["esn"],
+    arrowprops=dict(arrowstyle="->", color=COLORS["esn"]),
+  )
+  fig.tight_layout()
+  return _save(fig, "fig4_offline_baselines")
+
+
+# ── Fig 5: Hyperparam sweep ───────────────────────────────────
+def fig5_hyperparam_sweep() -> Path:
+  df = pd.read_csv(SWEEP_CSV)
+  alphas = sorted(df["leaky_rate"].unique())
+  lambdas = sorted(df["ridge_alpha"].unique())
+  grid = np.full((len(alphas), len(lambdas)), np.nan)
+  for _, r in df.iterrows():
+    i = alphas.index(r["leaky_rate"])
+    j = lambdas.index(r["ridge_alpha"])
+    grid[i, j] = r["rmse"]
+
+  fig, ax = plt.subplots(figsize=(4.6, 3.4))
+  im = ax.imshow(np.log10(grid), cmap="RdYlGn_r", aspect="auto")
+  cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+  cbar.set_label(r"$\log_{10}$ RMSE (rad)")
+  ax.set_xticks(range(len(lambdas)))
+  ax.set_xticklabels([f"{l:g}" for l in lambdas])
+  ax.set_yticks(range(len(alphas)))
+  ax.set_yticklabels([f"{a:g}" for a in alphas])
+  ax.set_xlabel(r"Ridge $\lambda$")
+  ax.set_ylabel(r"Leaky rate $\alpha$")
+  ax.set_title("ESN leak×ridge sweep (wipe ep.0)")
+
+  best = df.loc[df["selection_score"].idxmin()]
+  bi = alphas.index(best["leaky_rate"])
+  bj = lambdas.index(best["ridge_alpha"])
+  ax.add_patch(plt.Rectangle((bj - 0.5, bi - 0.5), 1, 1, fill=False,
+                              edgecolor="#0D47A1", lw=2.5))
+  for i in range(len(alphas)):
+    for j in range(len(lambdas)):
+      ax.text(j, i, f"{grid[i, j]:.2e}", ha="center", va="center", fontsize=6.5)
+  ax.text(
+    0.02, -0.18,
+    fr"Selected $(\alpha,\lambda)=({best['leaky_rate']:g},{best['ridge_alpha']:g})$, "
+    fr"RMSE={best['rmse']:.2e} rad",
+    transform=ax.transAxes, fontsize=7.5, color="#0D47A1",
+  )
+  fig.tight_layout()
+  return _save(fig, "fig5_hyperparam_sweep")
+
+
+# ── Fig 6: Contact ladder ─────────────────────────────────────
+def fig6_contact_ladder() -> Path:
+  mj = _load_json(MUJOCO_JSON)
+  esn = _load_json(LIVE_ESN)
+  zoh = _load_json(LIVE_ZOH)
+  oracle_contact = float(mj["table_contact_ratio_mean"]) * 100.0
+  live_esn = float(esn["task_metrics"]["table_contact_ratio"]) * 100.0
+  live_zoh = float(zoh["task_metrics"]["table_contact_ratio"]) * 100.0
+  # Paper-reported collapse without press_table (disclosure; not a new run here).
+  live_no_press = 5.0
+
+  labels = [
+    "MuJoCo oracle\n(demo tokens)",
+    "Live UnifoLM\nw/o press_table*",
+    "Live ESN\n+ press_table",
+    "Live ZOH\n+ press_table",
+  ]
+  vals = [oracle_contact, live_no_press, live_esn, live_zoh]
+  colors = [COLORS["esn"], "#9E9E9E", COLORS["esn"], COLORS["zoh"]]
+
+  fig, ax = plt.subplots(figsize=(6.2, 3.0))
+  bars = ax.bar(labels, vals, color=colors, edgecolor="white", width=0.65)
+  ax.set_ylim(0, 115)
+  ax.set_ylabel("Table-contact ratio (%)")
+  ax.set_title("Contact ladder: oracle plan vs live UnifoLM (+ priors)")
+  for b, v in zip(bars, vals):
+    ax.text(b.get_x() + b.get_width() / 2, v + 2, f"{v:.1f}%",
+            ha="center", fontsize=8, fontweight="bold")
+  ax.text(
+    0.5, -0.22,
+    "* ~5% without press_table is the measured collapse mode reported in the paper "
+    "(cloth lift); live rows use proximity-synthetic Dex1 + press_table.",
+    transform=ax.transAxes, ha="center", fontsize=6.5, color="#555555",
+  )
+  fig.tight_layout()
+  return _save(fig, "fig6_contact_ladder")
+
+
+# ── Fig 7: Dual-process rates ─────────────────────────────────
+def fig7_control_rates() -> Path:
+  df = pd.read_csv(DUAL_CSV)
+  order = ["zoh", "linear", "pid", "esn"]
+  labels = ["ZOH", "Linear", "PID", "ESN"]
+  colors = [COLORS["zoh"], COLORS["linear"], COLORS["pid"], COLORS["esn"]]
+  means, p99s, hz = [], [], []
+  for m in order:
+    row = df.loc[df["bridge"] == m].iloc[0]
+    means.append(float(row["mean_step_ms"]))
+    p99s.append(float(row["p99_step_ms"]))
+    hz.append(float(row["achieved_control_hz"]))
+
+  fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
+  ax = axes[0]
+  x = np.arange(len(labels))
+  ax.bar(x - 0.18, means, 0.36, color=colors, label="Mean", edgecolor="white")
+  ax.bar(x + 0.18, p99s, 0.36, color=colors, alpha=0.45, label="P99", edgecolor="white")
+  ax.axhline(10, color=COLORS["req"], ls="--", lw=1.2, label="10 ms budget")
+  ax.set_xticks(x)
+  ax.set_xticklabels(labels)
+  ax.set_ylabel("Step time (ms)")
+  ax.set_title("(a) Live dual-process step latency")
+  ax.legend(fontsize=7)
+
+  ax2 = axes[1]
+  bars = ax2.bar(labels, hz, color=colors, edgecolor="white")
+  ax2.axhline(100, color=COLORS["req"], ls="--", lw=1.2)
+  for b, v in zip(bars, hz):
+    ax2.text(b.get_x() + b.get_width() / 2, v + 3, f"{v:.0f}",
+             ha="center", fontsize=8, fontweight="bold")
+  ax2.set_ylabel("Achieved control Hz")
+  ax2.set_title("(b) Achieved rate (10 s live UnifoLM)")
+  ax2.set_ylim(0, max(hz) * 1.2)
+
+  fig.suptitle("GIL-free dual-process MuJoCo + bridge under live UnifoLM", fontweight="bold", y=1.02)
+  fig.tight_layout()
+  return _save(fig, "fig7_control_rates")
+
+
+# ── Fig 8: Oracle held-out ────────────────────────────────────
+def fig8_oracle_heldout() -> Path:
+  df = pd.read_csv(MUJOCO_CSV)
+  fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
+  ax = axes[0]
+  ax.hist(df["tracking_rmse"], bins=12, color=COLORS["esn"], edgecolor="white", alpha=0.9)
+  ax.axvline(df["tracking_rmse"].mean(), color="darkgreen", ls="--", lw=1.6,
+             label=f"Mean {df['tracking_rmse'].mean():.3e} rad")
+  ax.set_xlabel("Joint tracking RMSE (rad)")
+  ax.set_ylabel("Episodes")
+  ax.set_title("(a) Dataset-oracle ESN RMSE (n=40)")
+  ax.legend(fontsize=7)
+
+  ax2 = axes[1]
+  ax2.scatter(df["wipe_path_m"], df["table_contact_ratio"] * 100.0,
+              c=COLORS["esn"], s=28, alpha=0.85, edgecolors="white", lw=0.5)
+  ax2.axhline(df["table_contact_ratio"].mean() * 100.0, color="#555", ls=":",
+              label=f"Mean contact {df['table_contact_ratio'].mean()*100:.1f}%")
+  ax2.set_xlabel("Wipe path length (m)")
+  ax2.set_ylabel("Table contact (%)")
+  ax2.set_title("(b) Coverage vs contact (held-out)")
+  ax2.set_ylim(0, 105)
+  ax2.legend(fontsize=7)
+
+  grasp = 100.0 * df["grasp_success"].mean()
+  task = 100.0 * df["task_success"].mean()
+  fig.suptitle(
+    f"MuJoCo wipe oracle · grasp {grasp:.0f}% · task {task:.0f}% · "
+    f"eps 160–199",
+    fontweight="bold", y=1.02,
+  )
+  fig.tight_layout()
+  return _save(fig, "fig8_oracle_heldout")
+
+
+def write_manifest(paths: List[Path]) -> Path:
+  out = FIGURES_DIR / "FIGURE_MANIFEST.json"
+  payload = {
+    "generated_from_measured": True,
+    "mock": False,
+    "figures": [p.name for p in paths],
+    "sources": {
+      "profiling": str(PROFILE_REPORT),
+      "dataset_card": str(DATASET_CARD),
+      "esn_seed": str(ESN_SEED),
+      "baselines": str(BASELINE_JSON),
+      "dual_thread": str(DUAL_CSV),
+      "live_wipe_esn": str(LIVE_ESN),
+      "mujoco_heldout": str(MUJOCO_JSON),
+    },
+    "paper_figures_dir": str(PAPER_FIG_DIR),
+  }
+  out.write_text(json.dumps(payload, indent=2) + "\n")
+  (PAPER_FIG_DIR / "FIGURE_MANIFEST.json").write_text(out.read_text())
+  # Replace placeholder README
+  readme = FIGURES_DIR / "README.md"
+  readme.write_text(
+    "# ICRA paper figures (measured)\n\n"
+    "Generated by `python3 -m src.step4_paper_figures`.\n"
+    "Synced to `papers/icra2027/figures/`.\n"
+    "Do not commit mock grids; regenerate from `results/` JSON/CSV.\n"
+  )
+  return out
+
+
+def main() -> None:
+  parser = argparse.ArgumentParser(description="Generate measured ICRA paper figures")
+  parser.add_argument(
+    "--mock",
+    action="store_true",
+    help="Rejected: figures must come from measured results (exit nonzero)",
+  )
+  args = parser.parse_args()
+  if args.mock:
+    raise SystemExit(
+      "Refusing --mock: ICRA figures must be regenerated from measured results/ artifacts."
+    )
+
+  logger.info("Generating measured paper figures → %s", FIGURES_DIR)
+  paths = [
+    fig1_architecture(),
+    fig2_latency_gap(),
+    fig3_dataset_distribution(),
+    fig4_offline_baselines(),
+    fig5_hyperparam_sweep(),
+    fig6_contact_ladder(),
+    fig7_control_rates(),
+    fig8_oracle_heldout(),
+  ]
+  write_manifest(paths)
+  print("\nGenerated:")
+  for p in paths:
+    print(f"  {p}")
+  print(f"Paper sync: {PAPER_FIG_DIR}")
 
 
 if __name__ == "__main__":
-    main()
+  main()

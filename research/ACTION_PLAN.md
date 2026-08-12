@@ -1,12 +1,28 @@
 # Research Plan — VLA Frequency Gap + ESN Bridge (G1)
 
 **Author:** Osemudiamen Andrew Ihimekpen · PVAMU CREDIT Center  
-**Repo root:** `robotics/` (`main` @ origin; last pull includes Steps 2–4 held-out + Layer F live wipe)  
+**Repo root:** `/home/aihimekpen/research_summer_2026`  
 **Primary paper:** ICRA 2027 — deadline **15 Sep 2026 23:59 PST**  
 **Hardware:** Unitree G1 Edu · UnifoLM-VLA · MuJoCo · DGX V100 · (next) Jetson Thor  
 
 **Rule:** Prefer measured numbers over mock. Prefer held-out + task metrics over ep.0 RMSE.  
 **Claim rule:** ESN is a rate/smoothness bridge — not Unitree’s WBC, and not a vision-learned press policy.
+
+**Living checklist:** `research/RESEARCH_TODO.md` (update with this plan).
+
+---
+
+## Completion verdict (12 Aug 2026)
+
+| Track | Status | Notes |
+|---|---|---|
+| **ICRA Paper-1 experiments (wipe)** | **~85% done** | Steps 1–4 + Layer F live wipe measured; figures now in `main.pdf` |
+| **ICRA Paper-1 packaging** | **~70% done** | 8 measured figs wired; still need suite CSV fill, claim audit, video, PaperPlaza |
+| **Multi-task ESN library** | **IN PROGRESS on DGX** | `--all_tasks` PID running; 5+ full tasks done; wipe smoke-overwrote — **re-run wipe full** at end |
+| **S2R → Jetson → G1 Edu** | **NOT started** | Primary remaining research risk / Paper-2 |
+| **N/ρ ablations** | **Optional / partial** | Nice-to-have, not submit blocker |
+
+**Bottom line:** Sim evidence for the wipe frequency-gap story is strong enough to write/submit. Research is **not** “fully complete” until (1) multi-task suite CSV is honest, (2) wipe full checkpoint restored, (3) S2R/Edu path at least dry-runned for credibility, (4) manuscript freeze + PaperPlaza.
 
 ---
 
@@ -83,28 +99,34 @@ So the methodology still makes sense as a **2 Hz → 100 Hz bridge**. Live task 
 
 ---
 
-## 2. Pipeline status after pull
+## 2. Pipeline status (12 Aug 2026)
 
 ```text
-Step 1  UnifoLM latency                 DONE (freeze numbers)
-Step 2  CUDA ESN ridge (train 0–159)    DONE for wipe; **per-task suite** via `--all_tasks` (pending DGX fill)
+Step 1  UnifoLM latency                 DONE (freeze: pytorch_profiler_20260805_140730)
+Step 2  CUDA ESN ridge (wipe 0–159)     DONE historically; smoke overwrote ckpt — RESTORE with full --task wipe_table
+Step 2* Per-task ESN suite (--all_tasks) IN PROGRESS on DGX (log under /raid/.../esn_all_tasks_*.log)
 Step 3a Offline ZOH/linear/PID          DONE (held-out 160–199)
 Step 3b Dual-process live timing        DONE (esn/zoh/linear/pid)
-Step 3c Live wipe success (Layer F)     DONE for ESN (+ ZOH report exists)
+Step 3c Live wipe success (Layer F)     DONE for ESN (+ ZOH JSON exists)
 Step 4  MuJoCo oracle held-out          DONE (40 eps; contact 74.5%)
-Step 4* Paper figures/tables dirs       PLACEHOLDER — still empty
+Step 4* Paper figures                   DONE — `python3 -m src.step4_paper_figures` → papers/icra2027/figures/
+Step 4† Paper tables compile            PARTIAL — main.tex tables live; step4_paper_tables/ still thin
 Step 5  S2R → Jetson → G1 Edu           NEXT (primary remaining risk)
-Ablations N/ρ                           PARTIAL / remaining
+Ablations N/ρ                           OPTIONAL / remaining
+ICRA video                              NOT STARTED
+PaperPlaza dry-run                      NOT STARTED (≥48 h before 15 Sep)
 ```
 
 Key artifacts:
 
-- `results/step2_training/esn_heldout_eval.csv` + `esn_heldout_summary.json`
-- `results/step3_baselines/baseline_comparison_heldout.csv` + `*_summary.json`
+- `results/step1_profiling_unifolm_vla0/pytorch_profiler_20260805_140730/`
+- `results/step2_training/dataset_card_wipe_table.json` + `esn_task_registry_seed.json` (paper wipe RMSE)
+- `results/step3_baselines/baseline_comparison_summary.json`
 - `results/step3_dual_thread/dual_thread_summary_all_live.csv`
 - `results/step3_live_wipe/live_wipe_report_{esn,zoh}_live.json`
 - `results/step4_mujoco_evaluation/mujoco_eval_summary_heldout.{csv,json}`
-- Paper draft: `papers/icra2027/main.tex` (already updated to these numbers)
+- `results/step4_paper_figures/fig{1..8}_*.pdf` (+ sync to `papers/icra2027/figures/`)
+- Paper: `papers/icra2027/main.{tex,pdf}` (architecture, dataset, latency, sweep, baselines, rates, oracle, contact)
 
 ---
 
@@ -114,15 +136,19 @@ Key artifacts:
 
 Sim evidence is largely in. Remaining is honesty, packaging, and deploy credibility.
 
-1. **Claim audit of `main.tex`:** keep frequency-gap + tracking superiority; keep live wipe; always pair with `press_table` / synthetic-gripper limitations (already partly written — harden abstract so skimmers don’t miss it).
-2. **Regenerate `live_wipe_summary_live.csv`** to include **both** ESN and ZOH rows (ZOH JSON exists; summary CSV currently ESN-only).
-3. **Fill `results/step4_paper_tables/` and `step4_paper_figures/`** from held-out + baseline + live summaries (replace placeholders).
-4. **Optional contact ladder figure** (1 plot): oracle 74.5% vs live w/o press ~5% vs live w/ press 100% — resolves reviewer confusion you had yourself.
-5. **N/ρ ablation table** if cheap (`N ∈ {500,1000,2000}`, `ρ ∈ {0.85,0.95,1.05}`) — nice-to-have, not blocker if time dies.
-6. **ICRA video** (windows: Aug 5–Sep 9 and Sep 17–22): oracle wipe + live wipe clip + architecture slide.
-7. PaperPlaza dry-run ≥48 h before **15 Sep**.
+1. **Finish DGX `--all_tasks`** (`--continue_on_error`); copy final `esn_multitask_summary.csv` into paper Table II when ready.
+2. **Restore wipe full checkpoint** after suite:  
+   `python3 -m src.step2_esn_cuda_ridge --task wipe_table --train_episodes train --heldout_episodes heldout`  
+   (smoke used 4/2 eps and overwrote `models/esn_cuda_ridge/` + held-out CSVs).
+3. **Claim audit of `main.tex`:** harden abstract so skimmers cannot miss `press_table` / synthetic-gripper limits.
+4. **Regenerate `live_wipe_summary_live.csv`** with **both** ESN and ZOH rows (ZOH JSON exists).
+5. ~~**Fill paper figures**~~ **DONE** (`src/step4_paper_figures.py`; 8 measured figs in `main.pdf`).
+6. **Export `step4_paper_tables/`** CSV/TeX snippets from the same measured JSON (optional packaging).
+7. **N/ρ ablation table** if cheap — nice-to-have, not blocker.
+8. **ICRA video**: oracle wipe + live wipe clip + architecture slide.
+9. PaperPlaza dry-run ≥48 h before **15 Sep**.
 
-**Exit criteria:** 6+1 pages, all tables from held-out/live artifacts, limitations paragraph unmissable, video optional but preferred.
+**Exit criteria:** 6+1 pages, all tables/figs from held-out/live artifacts, limitations unmissable, wipe ckpt restored, suite CSV honest, video optional but preferred.
 
 ### Track P1 — Persona / real-robot credibility (parallel Aug–Dec)
 
@@ -162,13 +188,13 @@ Must-add:
 
 ---
 
-## 5. Weekly schedule (post-pull)
+## 5. Weekly schedule (updated 12 Aug)
 
 | Week | Focus | Deliverable |
 |---|---|---|
-| **Aug 11–17** | Claim audit + paper tables/figures from existing CSVs | Non-placeholder `step4_paper_*`; dual-bridge live summary |
-| **Aug 18–24** | G1 Edu dry-run (high-level, mock→limited) + ablation if time | Logged run; optional N/ρ table |
-| **Aug 25–31** | Manuscript freeze + ICRA video | 6+1 pages locked |
+| **Aug 11–17** | Multi-task suite finish + wipe restore + claim audit | Suite CSV; restored `esn_cuda_ridge/`; figures **done** |
+| **Aug 18–24** | G1 Edu dry-run (high-level, mock→limited) + optional N/ρ | Logged run; optional ablation table |
+| **Aug 25–31** | Manuscript freeze + ICRA video | 6+1 pages locked; video draft |
 | **Sep 1–7** | Polish + coauthor pass | Camera-ready draft |
 | **Sep 8–14** | PaperPlaza | **Submit Sep 15** |
 | **Sep 16–30** | Persona application | CV bullets §6 |
@@ -190,14 +216,24 @@ Must-add:
 
 ---
 
-## 7. Immediate runs (packaging only)
+## 7. Immediate runs
 
-```text
-# Prefer regenerating summaries/figures from existing reports — avoid re-training unless checkpoint drifts
-notebooks/step3_live_wipe_success.ipynb   # ensure summary CSV has esn+zoh
-notebooks/step4_mujoco_evaluation.ipynb   # already have heldout summary — export paper figs
-src/step4_paper_figures.py / step4_compile_results.py
-notebooks/step5_s2r_*.ipynb               # after manuscript freeze
+```bash
+# Monitor suite (already launched)
+tail -f /raid/data/aihimekpen/research_logs/esn_all_tasks_*.log
+
+# After suite finishes — restore paper wipe checkpoint (CRITICAL)
+cd research && source /raid/data/aihimekpen/venvs/research_summer_2026/bin/activate
+export HF_HOME=/raid/data/aihimekpen/hf_cache
+python3 -m src.step2_esn_cuda_ridge --task wipe_table --train_episodes train --heldout_episodes heldout
+
+# Regenerate paper figures after any metric refresh
+python3 -m src.step4_paper_figures
+cd ../papers/icra2027 && ../../tools/tectonic main.tex
+
+# Packaging
+# notebooks/step3_live_wipe_success.ipynb   # ensure summary CSV has esn+zoh
+# notebooks/step5_s2r_*.ipynb               # after manuscript freeze
 ```
 
 ---
@@ -207,8 +243,9 @@ notebooks/step5_s2r_*.ipynb               # after manuscript freeze
 - Do not replace Unitree WBC with ESN.
 - Do not hide `press_table` / synthetic gripper when quoting 100% live wipe.
 - Do not claim ESN uniquely wins live task success vs ZOH under identical priors.
-- Do not expand multi-task VLA training before ICRA submit.
-- Do not leave placeholder `step4_paper_*` directories in the camera-ready bundle.
+- Do not expand multi-task VLA training before ICRA submit (ESN library OK).
+- Do not leave smoke-overwrite wipe checkpoints as paper artifacts.
+- Do not regenerate paper figures with `--mock` / invented success priors.
 - Do not treat n_trials=1 live wipe as a large-N statistical claim.
 
 ---

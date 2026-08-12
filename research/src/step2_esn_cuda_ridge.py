@@ -45,7 +45,7 @@ import torch
 import torch.nn as nn
 from datasets import load_dataset
 
-from src.paths import models_path, results_path
+from src.paths import models_path, models_root, results_path
 from src.trajectory_metrics import compute_jerk_metric, compute_physical_jerk_rms
 from src.wipe_dataset import HELDOUT_EPISODES, TRAIN_EPISODES, parse_episode_spec
 
@@ -979,7 +979,7 @@ def update_task_registry(
   registry_path: Optional[Path] = None,
 ) -> Path:
   """Merge one task entry into ``models/esn_task_registry.json``."""
-  registry_path = Path(registry_path or models_path("esn_task_registry.json"))
+  registry_path = Path(registry_path or (models_root() / "esn_task_registry.json"))
   registry_path.parent.mkdir(parents=True, exist_ok=True)
   registry: Dict[str, Any] = {}
   if registry_path.is_file():
@@ -1373,7 +1373,7 @@ def main() -> None:
     print("\nMulti-task summary written:")
     print(f"  {paths['csv']}")
     print(f"  {paths['json']}")
-    print(f"  Registry: {models_path('esn_task_registry.json')}")
+    print(f"  Registry: {models_root() / 'esn_task_registry.json'}")
     ok = [s for s in summaries if s.get("status") == "ok"]
     print(f"  Succeeded: {len(ok)}/{len(summaries)}")
 
