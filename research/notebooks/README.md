@@ -15,7 +15,7 @@ Run from `research/` (or use each notebook’s path-setup cell so `src` / `s2r` 
 | `step1_unifolm_mock_profiling.ipynb` | 1 | Dry-run profiling (no weight download) |
 | `step1_unifolm_profiling.ipynb` | 1 | UnifoLM latency on lab GPU |
 | `step1_unifolm_nsight_systems_profiling.ipynb` | 1 | Nsight Systems traces |
-| `step2_esn_cuda_ridge.ipynb` | 2 | CUDA ESN ridge — multi-ep train `0–159`, held-out eval `160–199` |
+| `step2_esn_cuda_ridge.ipynb` | 2 | CUDA ESN ridge — **per-task** checkpoints (`TASK_ID` / `TRAIN_ALL_TASKS`); wipe train `0–159`, held-out `160–199` |
 | **`step3_control_baselines.ipynb`** | 3 | **Offline ZOH / linear / PID** (default: held-out episodes) |
 | **`step3_dual_thread_mujoco.ipynb`** | 3 | **Live UnifoLM dual-process** — timing only (`MOCK=False`) |
 | **`step3_live_wipe_success.ipynb`** | 3 | **Live UnifoLM wipe success** — grasp/contact/task metrics (Layer F) |

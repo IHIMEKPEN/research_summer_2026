@@ -165,6 +165,18 @@ def esn_checkpoint_basename(task_id: str = DEFAULT_TASK_ID) -> str:
     return f"esn_cuda_ridge_{tid}"
 
 
+# Dual-robot clean-table uses a different embodiment / unnorm keys; train via
+# ``--task dual_clean_table`` explicitly rather than the default suite loop.
+ESN_SUITE_TASK_IDS: Tuple[str, ...] = tuple(
+    tid for tid in UNIFOLM_TASKS if tid != "dual_clean_table"
+)
+
+
+def list_esn_suite_tasks() -> List[UnifoLMTask]:
+    """Single-embodiment UnifoLM G1 tasks used for per-task ESN training."""
+    return [UNIFOLM_TASKS[tid] for tid in ESN_SUITE_TASK_IDS]
+
+
 def list_tasks() -> List[UnifoLMTask]:
     return list(UNIFOLM_TASKS.values())
 

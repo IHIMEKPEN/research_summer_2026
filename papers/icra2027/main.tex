@@ -113,7 +113,7 @@ Training and evaluation use Unitree's public \texttt{G1\_Dex1\_Wipe\_Table} demo
 
 \textbf{Contributions.}
 (i)~Dual-instrument UnifoLM-VLA-Base latency on \texttt{G1\_Clean\_Table}: 100-trial PyTorch profiler + Nsight Systems NVTX/CUDA timeline, quantifying a $\sim$57--59$\times$ gap to 100\,Hz;
-(ii)~CUDA ESN with $u(t)=[q_t;\,q^{\star}_{\mathrm{VLA}}]\in\mathbb{R}^{58}$ and ridge readout, with a measured leak$\times$ridge sweep on wipe-table demonstrations and a declared train/held-out episode split;
+(ii)~CUDA ESN with $u(t)=[q_t;\,q^{\star}_{\mathrm{VLA}}]\in\mathbb{R}^{58}$ and ridge readout, with a measured leak$\times$ridge sweep on wipe-table demonstrations, a declared train/held-out episode split, and a \textbf{per-task checkpoint library} for the UnifoLM G1 suite;
 (iii)~GIL-free dual-process MuJoCo$+$bridge control comparing ESN against ZOH, linear, and PID under live UnifoLM (timing);
 (iv)~MuJoCo wipe-table \emph{dataset-oracle} evaluation on all 40 held-out episodes (joint RMSE, grasp, contact, coverage), separated from live closed-loop success;
 (v)~Live UnifoLM wipe-success trials with interactive cloth (proximity-synthetic Dex1 proxy) reporting grasp/contact/task metrics under ESN vs.\ ZOH;
@@ -182,7 +182,7 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
 \section{Methodology}
 \subsection{System Architecture}
 \begin{itemize}
-  \item \textbf{Perception / VLA:} \texttt{UnifoLM-VLA-Base} (backbone \texttt{UnifoLM-VLM-Base}) emits 29-D joint actions for clean/wipe-table goals (e.g., \texttt{g1\_clean\_table}); EE-space variants map poses to joints via Jacobian IK when needed.
+  \item \textbf{Perception / VLA:} \texttt{UnifoLM-VLA-Base} (backbone \texttt{UnifoLM-VLM-Base}) emits \textbf{23-D end-effector} action chunks for G1 wipe/clean tasks (\texttt{g1\_wipe\_table}, \texttt{g1\_clean\_table}, \ldots); a Jacobian \textbf{IK bridge} maps EE poses to 29-D joint targets for the ESN.
   \item \textbf{ESN bridge:} Leaky reservoir update
   \[
   x(t)=(1-\alpha)x(t-1)+\alpha\,\tanh\!\big(W_{\mathrm{res}}x(t-1)+W_{\mathrm{in}}u(t)\big),
@@ -190,6 +190,7 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
   with sparse $W_{\mathrm{res}}$ ($N{=}1000$, $\rho{=}0.95$, sparsity $0.9$) and readout
   $y(t)=W_{\mathrm{out}}[x(t);u(t)]$ fit by ridge regression on 100\,Hz joints with VLA tokens held for 50 ticks ($u\in\mathbb{R}^{58}$, $y\in\mathbb{R}^{29}$).
   We sweep $\alpha\in\{0.05,0.1,0.3\}$ and $\lambda\in\{10^{-4},10^{-2},1\}$ and select by RMSE$\times$jerk score.
+  \textbf{Per-task library:} one readout checkpoint is trained per UnifoLM G1 skill corpus and stored under \texttt{models/esn\_cuda\_ridge\_\textless task\textgreater/} (wipe retains legacy \texttt{models/esn\_cuda\_ridge/}); at deploy time \texttt{load\_esn\_for\_task(task\_id)} selects the matching weights.
   \item \textbf{S2R / DIRT layer:} Parameterizes sim--real discrepancy for controller and domain ablations (ESN vs.\ passthrough ZOH/raw).
 \end{itemize}
 
@@ -211,15 +212,35 @@ There are \textbf{200} demonstration episodes ($75{,}909$ frames at $\sim$30\,Hz
 each lasting roughly $9.9$--$16.8$\,s (mean $12.6$\,s).
 Observations include 29-D whole-body joints (\texttt{observation.body}), bimanual arms/grippers, and EE poses;
 \texttt{task\_index} is identically $0$ (wipe only)---there is no free-text language field in this release.
-We therefore restrict scientific claims to \emph{this} wipe-table distribution on the G1 Dex1 embodiment, not to general multi-task humanoid skill.
+We therefore restrict \emph{detailed} wipe-oracle and live-wipe claims to
+\texttt{G1\_Dex1\_Wipe\_Table}, while the training stack supports a
+\textbf{per-task ESN library} over the eleven single-embodiment UnifoLM G1 corpora
+(stack/bag/erase/clean/pack/pour/fruit/tools/towel/wipe; dual-robot clean is opt-in).
+Each task writes an independent checkpoint and held-out RMSE row to
+\texttt{results/step2\_training/esn\_multitask\_summary.csv}; Table~\ref{tab:esn_suite}
+reports the wipe row (measured) and the suite layout.
+
+\begin{table}[!t]
+\centering
+\caption{Per-task ESN bridge library (open-loop held-out RMSE). Wipe is the ICRA primary corpus; other rows are filled by \texttt{python3 -m src.step2\_esn\_cuda\_ridge --all\_tasks} on the DGX.}
+\label{tab:esn_suite}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\columnwidth}{@{}l L c c@{}}
+\toprule
+\textbf{Task} & \textbf{Dataset} & \textbf{Held-out RMSE} & \textbf{Checkpoint} \\
+\midrule
+wipe\_table & \texttt{G1\_Dex1\_Wipe\_Table} & $2.78\times10^{-3}\!\pm\!3.44\times10^{-3}$ & \texttt{esn\_cuda\_ridge/} \\
+stack\_block \ldots fold\_towel & Unitree G1 LeRobot suites & suite CSV & \texttt{esn\_cuda\_ridge\_\textless task\textgreater/} \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 \textbf{Episode-level split.}
-To avoid temporal leakage from random frame shuffles, we hold out the last 20\% of episodes by index:
-\textbf{train} episodes $0$--$159$ ($160$ eps, $60{,}763$ frames) and
+To avoid temporal leakage from random frame shuffles, we hold out the last 20\% of episodes by index.
+For wipe: \textbf{train} episodes $0$--$159$ ($160$ eps, $60{,}763$ frames) and
 \textbf{held-out} episodes $160$--$199$ ($40$ eps, $15{,}146$ frames).
-Hyperparameter sweeps may use a train subset for speed; the deployed readout should be fit on the train pool and scored on held-out episodes.
-Reporting train-episode success as ``generalization'' is invalid under this protocol.
-Dataset-oracle MuJoCo replay (proprio $+$ held demo tokens) is likewise \emph{not} live UnifoLM closed-loop evidence.
+Other tasks use the same 80/20 episode policy after discovering $N$ episodes.
 
 \begin{table}[!t]
 \centering

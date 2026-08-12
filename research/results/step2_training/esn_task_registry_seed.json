@@ -1,0 +1,19 @@
+{
+  "wipe_table": {
+    "task_id": "wipe_table",
+    "unnorm_key": "g1_wipe_table",
+    "dataset_id": "unitreerobotics/G1_Dex1_Wipe_Table",
+    "checkpoint_dir": "models/esn_cuda_ridge",
+    "checkpoint_pth": "models/esn_cuda_ridge/esn_cuda_ridge_best.pth",
+    "n_train_episodes": 160,
+    "n_heldout_episodes": 40,
+    "train_rmse": 0.001102,
+    "heldout_rmse_mean": 0.0027750881633227665,
+    "heldout_rmse_std": 0.0034445573325602376,
+    "heldout_jerk_mean": 4.757448931513864e-06,
+    "leaky_rate": 0.3,
+    "ridge_alpha": 1.0,
+    "status": "ok",
+    "note": "Seeded from measured Step-2 held-out campaign (Aug 2026). Re-run --task wipe_table or --all_tasks on DGX to refresh."
+  }
+}

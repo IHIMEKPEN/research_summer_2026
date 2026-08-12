@@ -1,0 +1,12 @@
+task_id,unnorm_key,dataset_id,n_train_episodes,n_heldout_episodes,heldout_rmse_mean,heldout_rmse_std,status,checkpoint_dir
+wipe_table,g1_wipe_table,unitreerobotics/G1_Dex1_Wipe_Table,160,40,0.002775,0.003445,ok,models/esn_cuda_ridge
+stack_block,g1_stack_block,unitreerobotics/G1_Stack_Block,,,,pending,models/esn_cuda_ridge_stack_block
+bag_insert,g1_bag_insert,unitreerobotics/G1_Bag_Insert,,,,pending,models/esn_cuda_ridge_bag_insert
+erase_board,g1_erase_board,unitreerobotics/G1_Erase_Board,,,,pending,models/esn_cuda_ridge_erase_board
+clean_table,g1_clean_table,unitreerobotics/G1_Clean_Table,,,,pending,models/esn_cuda_ridge_clean_table
+pack_pencilbox,g1_pack_pencilbox,unitreerobotics/G1_Pack_PencilBox,,,,pending,models/esn_cuda_ridge_pack_pencilbox
+pour_medicine,g1_pour_medicine,unitreerobotics/G1_Pour_Medicine,,,,pending,models/esn_cuda_ridge_pour_medicine
+pack_pingpong,g1_pack_pingpong,unitreerobotics/G1_Pack_PingPong,,,,pending,models/esn_cuda_ridge_pack_pingpong
+prepare_fruit,g1_prepare_fruit,unitreerobotics/G1_Prepare_Fruit,,,,pending,models/esn_cuda_ridge_prepare_fruit
+organize_tools,g1_organize_tools,unitreerobotics/G1_Organize_Tools,,,,pending,models/esn_cuda_ridge_organize_tools
+fold_towel,g1_fold_towel,unitreerobotics/G1_Fold_Towel,,,,pending,models/esn_cuda_ridge_fold_towel

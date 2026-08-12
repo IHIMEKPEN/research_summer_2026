@@ -16,12 +16,17 @@ Usage (from research/):
   # Multi-episode (canonical split: train 0-159, held-out 160-199):
   python3 -m src.step2_esn_cuda_ridge --train_episodes train --heldout_episodes heldout
   python3 -m src.step2_esn_cuda_ridge --train_episodes 0-15 --heldout_episodes 160-163  # smoke
+  # Per-task / full UnifoLM suite (one checkpoint folder per task):
+  python3 -m src.step2_esn_cuda_ridge --task clean_table
+  python3 -m src.step2_esn_cuda_ridge --all_tasks --continue_on_error
+  python3 -m src.step2_esn_cuda_ridge --tasks wipe_table,stack_block,fold_towel
 
 Inference:
-  from src.step2_esn_cuda_ridge import load_checkpoint
-  esn = load_checkpoint("models/esn_cuda_ridge")
-  esn.update_vla_target(vla_joint_target)      # 2 Hz
-  cmd = esn.step_proprio(current_joint_state)    # 100 Hz
+  from src.step2_esn_cuda_ridge import load_checkpoint, load_esn_for_task
+  esn = load_esn_for_task("wipe_table")           # models/esn_cuda_ridge/
+  esn = load_esn_for_task("stack_block")          # models/esn_cuda_ridge_stack_block/
+  esn.update_vla_target(vla_joint_target)         # 2 Hz
+  cmd = esn.step_proprio(current_joint_state)     # 100 Hz
 """
 
 from __future__ import annotations
@@ -93,23 +98,44 @@ class ESNCudaConfig:
 # ── Data loading ──────────────────────────────────────────────
 def extract_joint_state_29d(row: Dict) -> torch.Tensor:
     """
-    Build the 29-DoF continuous joint vector from arm, gripper, and body keys.
+    Build the 29-DoF continuous joint vector from LeRobot G1 rows.
 
-    Layout (verified against G1_Dex1_Wipe_Table):
+    Preferred layout (G1_Dex1_Wipe_Table and most Unitree G1 demos):
       body[0:15]  legs + waist
-      body[15:22] left arm  == observation.left_arm
-      body[22:29] right arm == observation.right_arm
+      body[15:22] left arm  == observation.left_arm (when present)
+      body[22:29] right arm == observation.right_arm (when present)
 
-    Dex1 grippers (observation.left_gripper / right_gripper) are separate
-    end-effector channels and are not part of the 29-DoF body vector used
-    for high-rate joint tracking (matches G1_DOF in this repo).
+    Dex1 / multi-finger channels (``observation.*_gripper``) are separate
+    end-effector signals and are **not** part of this 29-DoF tracking vector.
+
+    Falls back to ``observation.body`` alone when arm keys are missing but
+    body is already 29-D (other UnifoLM G1 task corpora).
     """
-    body = torch.tensor(row["observation.body"], dtype=torch.float32)
-    left_arm = torch.tensor(row["observation.left_arm"], dtype=torch.float32)
-    right_arm = torch.tensor(row["observation.right_arm"], dtype=torch.float32)
+    if "observation.body" not in row:
+        raise KeyError("Row missing observation.body (required for 29-DoF ESN)")
 
-    # Explicitly fuse leg/waist + dual-arm observations into one state vector.
-    state = torch.cat([body[:15], left_arm, right_arm], dim=0)
+    body = torch.as_tensor(row["observation.body"], dtype=torch.float32).flatten()
+    has_arms = "observation.left_arm" in row and "observation.right_arm" in row
+    if has_arms:
+        left_arm = torch.as_tensor(row["observation.left_arm"], dtype=torch.float32).flatten()
+        right_arm = torch.as_tensor(row["observation.right_arm"], dtype=torch.float32).flatten()
+        if left_arm.numel() == 7 and right_arm.numel() == 7 and body.numel() >= 15:
+            state = torch.cat([body[:15], left_arm, right_arm], dim=0)
+        elif body.numel() == G1_DOF:
+            state = body
+        else:
+            raise ValueError(
+                f"Cannot build 29-DoF state from body={body.numel()} "
+                f"left_arm={left_arm.numel()} right_arm={right_arm.numel()}"
+            )
+    elif body.numel() == G1_DOF:
+        state = body
+    else:
+        raise ValueError(
+            f"Expected observation.body with {G1_DOF} joints "
+            f"(or body[:15]+arms), got {body.numel()}"
+        )
+
     if state.numel() != G1_DOF:
         raise ValueError(f"Expected {G1_DOF} joints, got {state.numel()}")
     return state
@@ -761,6 +787,8 @@ def _build_checkpoint_payload(
   heldout_episodes: Optional[Sequence[int]] = None,
   heldout_metrics: Optional[Dict[str, float]] = None,
   dataset_id: str = DATASET_ID,
+  task_id: Optional[str] = None,
+  unnorm_key: Optional[str] = None,
 ) -> Dict[str, Any]:
   w_res_coo = esn.W_res.to_sparse_coo().cpu()
   train_eps = list(train_episodes) if train_episodes is not None else (
@@ -772,6 +800,8 @@ def _build_checkpoint_payload(
     "config": esn.cfg.__dict__,
     "metrics": metrics,
     "dataset_id": dataset_id,
+    "task_id": task_id,
+    "unnorm_key": unnorm_key,
     "episode_index": episode_index if episode_index is not None else (
       train_eps[0] if train_eps else None
     ),
@@ -800,6 +830,8 @@ def save_checkpoint(
   heldout_metrics: Optional[Dict[str, float]] = None,
   dataset_id: str = DATASET_ID,
   basename: str = CHECKPOINT_BASENAME,
+  task_id: Optional[str] = None,
+  unnorm_key: Optional[str] = None,
 ) -> Dict[str, Path]:
   """
   Persist a trained ESN for later inference.
@@ -823,6 +855,8 @@ def save_checkpoint(
     heldout_episodes=heldout_episodes,
     heldout_metrics=heldout_metrics,
     dataset_id=dataset_id,
+    task_id=task_id,
+    unnorm_key=unnorm_key,
   )
   pt_path = out_dir / f"{basename}.pt"
   pth_path = out_dir / f"{basename}.pth"
@@ -833,6 +867,8 @@ def save_checkpoint(
   meta = {
     "checkpoint_version": CHECKPOINT_VERSION,
     "model": "EchoStateNetwork",
+    "task_id": task_id,
+    "unnorm_key": unnorm_key,
     "dataset_id": dataset_id,
     "episode_index": payload.get("episode_index"),
     "train_episodes": train_eps,
@@ -911,6 +947,8 @@ def load_checkpoint(
   esn.eval()
 
   logger.info("Loaded ESN checkpoint from %s (v%s)", pt_path, payload.get("checkpoint_version", "?"))
+  if payload.get("task_id"):
+    logger.info("  task_id=%s | unnorm_key=%s", payload.get("task_id"), payload.get("unnorm_key"))
   if "metrics" in payload:
     logger.info(
       "  MSE=%.6f | jerk=%.6f | step_hz=%s",
@@ -921,18 +959,293 @@ def load_checkpoint(
   return esn
 
 
+def load_esn_for_task(
+  task_id: str,
+  device: Union[str, torch.device] = "cuda",
+  *,
+  checkpoint_dir: Optional[Union[str, Path]] = None,
+) -> EchoStateNetwork:
+  """Load the per-task ESN checkpoint (``models/esn_cuda_ridge_<task>``)."""
+  from src.unifolm_tasks import esn_checkpoint_basename, get_task
+
+  task = get_task(task_id)
+  out = Path(checkpoint_dir) if checkpoint_dir else models_path(esn_checkpoint_basename(task.id))
+  return load_checkpoint(out, device=device)
+
+
+def update_task_registry(
+  entry: Dict[str, Any],
+  *,
+  registry_path: Optional[Path] = None,
+) -> Path:
+  """Merge one task entry into ``models/esn_task_registry.json``."""
+  registry_path = Path(registry_path or models_path("esn_task_registry.json"))
+  registry_path.parent.mkdir(parents=True, exist_ok=True)
+  registry: Dict[str, Any] = {}
+  if registry_path.is_file():
+    try:
+      registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+      registry = {}
+  task_id = str(entry["task_id"])
+  registry[task_id] = entry
+  registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+  logger.info("Updated task registry: %s (%s)", registry_path, task_id)
+  return registry_path
+
+
+def write_multitask_summary(
+  rows: Sequence[Dict[str, Any]],
+  *,
+  out_dir: Optional[Path] = None,
+) -> Dict[str, Path]:
+  """Write suite CSV + JSON under ``results/step2_training/``."""
+  out_dir = Path(out_dir or results_path("step2_training"))
+  out_dir.mkdir(parents=True, exist_ok=True)
+  df = pd.DataFrame(list(rows))
+  csv_path = out_dir / "esn_multitask_summary.csv"
+  json_path = out_dir / "esn_multitask_summary.json"
+  df.to_csv(csv_path, index=False)
+  json_path.write_text(json.dumps(list(rows), indent=2), encoding="utf-8")
+  logger.info("Multi-task summary: %s", csv_path)
+  return {"csv": csv_path, "json": json_path}
+
+
 # ── Main ──────────────────────────────────────────────────────
+def run_training_for_task(
+  task_id: str,
+  *,
+  dataset_id: Optional[str] = None,
+  train_episodes_spec: str = "train",
+  heldout_episodes_spec: str = "heldout",
+  sweep_episodes_spec: Optional[str] = None,
+  max_train_episodes: Optional[int] = None,
+  max_heldout_episodes: Optional[int] = None,
+  episode: Optional[int] = None,
+  reservoir_size: int = 1000,
+  spectral_radius: float = 0.95,
+  sparsity: float = 0.90,
+  leaky_rate: float = 0.1,
+  input_scaling: float = 1.0,
+  ridge_alpha: float = 1e-2,
+  washout: int = 50,
+  seed: int = 42,
+  device: str = "cuda",
+  skip_sweep: bool = False,
+  jerk_weight: float = 1.0,
+) -> Dict[str, Any]:
+  """Train + eval one UnifoLM task; save a dedicated checkpoint + results."""
+  from src.unifolm_tasks import esn_checkpoint_basename, get_task
+  from src.wipe_dataset import resolve_task_episode_spec
+
+  task = get_task(task_id)
+  dataset_id = dataset_id or task.primary_dataset_id
+
+  if not torch.cuda.is_available() and str(device).startswith("cuda"):
+    raise RuntimeError("CUDA is required for this script (target: Tesla V100).")
+
+  torch_device = torch.device(device)
+  if torch_device.type == "cuda":
+    logger.info("Device: %s (%s)", torch_device, torch.cuda.get_device_name(torch_device))
+  else:
+    logger.info("Device: %s", torch_device)
+  logger.info("Task=%s | unnorm_key=%s | dataset=%s", task.id, task.unnorm_key, dataset_id)
+
+  if episode is not None:
+    train_episodes = [int(episode)]
+  else:
+    train_episodes = resolve_task_episode_spec(train_episodes_spec, dataset_id=dataset_id)
+  if max_train_episodes is not None:
+    train_episodes = train_episodes[: max(0, int(max_train_episodes))]
+  heldout_episodes = resolve_task_episode_spec(heldout_episodes_spec, dataset_id=dataset_id)
+  if max_heldout_episodes is not None:
+    heldout_episodes = heldout_episodes[: max(0, int(max_heldout_episodes))]
+  if sweep_episodes_spec:
+    sweep_episodes = resolve_task_episode_spec(sweep_episodes_spec, dataset_id=dataset_id)
+  else:
+    sweep_episodes = [train_episodes[0]]
+
+  logger.info("Loading dataset %s ...", dataset_id)
+  dataset = load_dataset(dataset_id, split="train")
+  logger.info(
+    "Train eps=%d %s… | sweep eps=%s | held-out eps=%d %s…",
+    len(train_episodes),
+    train_episodes[:5],
+    sweep_episodes,
+    len(heldout_episodes),
+    heldout_episodes[:5],
+  )
+
+  sweep_js, sweep_vla = load_episode_tensors(dataset, sweep_episodes[0], torch_device)
+  if len(sweep_episodes) > 1:
+    logger.info(
+      "Note: hyperparam sweep uses episode %d only; final fit uses all train episodes.",
+      sweep_episodes[0],
+    )
+  sweep_gt = sweep_js.clone()
+
+  base_cfg = ESNCudaConfig(
+    reservoir_size=reservoir_size,
+    spectral_radius=spectral_radius,
+    sparsity=sparsity,
+    leaky_rate=leaky_rate,
+    input_scaling=input_scaling,
+    ridge_alpha=ridge_alpha,
+    washout=washout,
+    seed=seed,
+  )
+
+  out_dir = models_path(esn_checkpoint_basename(task.id))
+  if task.id == "wipe_table":
+    sweep_dir = results_path("step2_training")
+  else:
+    sweep_dir = results_path("step2_training", task.id)
+  sweep_dir.mkdir(parents=True, exist_ok=True)
+
+  if skip_sweep:
+    esn = EchoStateNetwork(base_cfg, device=torch_device).to(torch_device)
+    logger.info(
+      "ESN init (no sweep) | N=%d | α_leak=%.2f | λ=%.1e",
+      base_cfg.reservoir_size,
+      base_cfg.leaky_rate,
+      base_cfg.ridge_alpha,
+    )
+    if len(train_episodes) == 1:
+      metrics = train_esn_on_episode(esn, sweep_js, sweep_vla, sweep_gt)
+    else:
+      metrics = train_esn_on_episodes(esn, dataset, train_episodes, torch_device)
+    sweep_df = None
+  else:
+    sweep_df, best_row = run_hyperparameter_sweep(
+      base_cfg,
+      sweep_js,
+      sweep_vla,
+      sweep_gt,
+      torch_device,
+      jerk_weight=jerk_weight,
+    )
+    sweep_csv = sweep_dir / "esn_hyperparam_sweep.csv"
+    sweep_df.to_csv(sweep_csv, index=False)
+    logger.info("Sweep results saved: %s", sweep_csv)
+
+    cfg = replace(
+      base_cfg,
+      leaky_rate=float(best_row["leaky_rate"]),
+      ridge_alpha=float(best_row["ridge_alpha"]),
+    )
+    esn = EchoStateNetwork(cfg, device=torch_device).to(torch_device)
+    if len(train_episodes) == 1:
+      esn, metrics = train_best_esn_from_sweep(
+        base_cfg, best_row, sweep_js, sweep_vla, sweep_gt, torch_device,
+      )
+    else:
+      metrics = train_esn_on_episodes(esn, dataset, train_episodes, torch_device)
+      metrics["selection_score"] = float(best_row["selection_score"])
+
+  metrics["step_hz"] = benchmark_step_hz(esn, esn.cfg.input_dim)
+  logger.info("Reservoir step throughput: %.1f Hz (target >100 Hz)", metrics["step_hz"])
+
+  heldout_rows: List[Dict[str, Any]] = []
+  heldout_mean: Dict[str, float] = {}
+  if heldout_episodes:
+    heldout_rows, heldout_mean = evaluate_esn_on_episodes(
+      esn, dataset, heldout_episodes, torch_device,
+    )
+    held_csv = sweep_dir / "esn_heldout_eval.csv"
+    pd.DataFrame(heldout_rows).to_csv(held_csv, index=False)
+    (sweep_dir / "esn_heldout_summary.json").write_text(json.dumps(heldout_mean, indent=2))
+    logger.info("Held-out summary: %s", heldout_mean)
+    logger.info("Held-out per-episode CSV: %s", held_csv)
+
+  artifact_paths = save_checkpoint(
+    esn,
+    metrics,
+    out_dir,
+    episode_index=train_episodes[0],
+    train_episodes=train_episodes,
+    heldout_episodes=heldout_episodes,
+    heldout_metrics=heldout_mean or None,
+    dataset_id=dataset_id,
+    basename=BEST_CHECKPOINT_BASENAME,
+    task_id=task.id,
+    unnorm_key=task.unnorm_key,
+  )
+
+  summary = {
+    "task_id": task.id,
+    "unnorm_key": task.unnorm_key,
+    "dataset_id": dataset_id,
+    "checkpoint_dir": str(out_dir),
+    "checkpoint_pth": str(artifact_paths["pth"]),
+    "n_train_episodes": len(train_episodes),
+    "n_heldout_episodes": len(heldout_episodes),
+    "train_rmse": float(metrics.get("rmse", float("nan"))),
+    "train_jerk": float(metrics.get("jerk", float("nan"))),
+    "heldout_rmse_mean": float(heldout_mean.get("rmse_mean", float("nan"))) if heldout_mean else float("nan"),
+    "heldout_rmse_std": float(heldout_mean.get("rmse_std", float("nan"))) if heldout_mean else float("nan"),
+    "heldout_jerk_mean": float(heldout_mean.get("jerk_mean", float("nan"))) if heldout_mean else float("nan"),
+    "leaky_rate": float(metrics.get("leaky_rate", esn.cfg.leaky_rate)),
+    "ridge_alpha": float(metrics.get("ridge_alpha", esn.cfg.ridge_alpha)),
+    "step_hz": float(metrics.get("step_hz", float("nan"))),
+    "status": "ok",
+  }
+  update_task_registry(summary)
+
+  print("\n" + "=" * 60)
+  print("  ESN CUDA Ridge Training — Phase 2 (multi-episode)")
+  print("=" * 60)
+  print(f"  Task            : {task.id} ({task.unnorm_key})")
+  print(f"  Dataset         : {dataset_id}")
+  print(f"  Train episodes  : {len(train_episodes)}  ({train_episodes[0]}…{train_episodes[-1]})")
+  print(f"  Held-out episodes: {len(heldout_episodes)}")
+  if task.id == "wipe_table":
+    print(f"  Canonical split : train={len(TRAIN_EPISODES)} heldout={len(HELDOUT_EPISODES)}")
+  print(f"  VLA hold period : {VLA_HOLD_STEPS} steps ({VLA_HZ:.0f} Hz)")
+  print(f"  Reservoir N     : {esn.cfg.reservoir_size}")
+  print(f"  Best α_leak     : {metrics.get('leaky_rate', esn.cfg.leaky_rate):.2f}")
+  print(f"  Best ridge λ    : {metrics.get('ridge_alpha', esn.cfg.ridge_alpha):.1e}")
+  print(f"  Train-ref RMSE  : {metrics['rmse']:.6f} rad (ep {int(metrics.get('train_metrics_episode', train_episodes[0]))})")
+  if heldout_mean:
+    print(
+      f"  Held-out RMSE   : {heldout_mean['rmse_mean']:.6f} ± {heldout_mean['rmse_std']:.6f} rad "
+      f"(n={int(heldout_mean['n_episodes'])})"
+    )
+  print(f"  Step throughput : {metrics['step_hz']:.1f} Hz")
+  print(f"  Best .pth       : {artifact_paths['pth']}")
+  print(f"  Config JSON     : {artifact_paths['json']}")
+  if sweep_df is not None:
+    print(f"  Sweep CSV       : {sweep_dir / 'esn_hyperparam_sweep.csv'}")
+  print("=" * 60)
+  return summary
+
+
 def main() -> None:
   parser = argparse.ArgumentParser(description="Train CUDA ESN readout with ridge regression")
   from src.unifolm_tasks import (
     DEFAULT_TASK_ID,
+    ESN_SUITE_TASK_IDS,
     add_task_arg,
     get_task,
+    list_esn_suite_tasks,
     maybe_print_tasks_and_exit,
   )
-  from src.wipe_dataset import resolve_task_episode_spec
 
   add_task_arg(parser, default=DEFAULT_TASK_ID)
+  parser.add_argument(
+    "--all_tasks",
+    action="store_true",
+    help=(
+      "Train one ESN per single-embodiment UnifoLM G1 task "
+      f"({len(ESN_SUITE_TASK_IDS)} tasks; excludes dual_clean_table). "
+      "Writes models/esn_cuda_ridge_<task>/ and results/step2_training/esn_multitask_summary.*"
+    ),
+  )
+  parser.add_argument(
+    "--tasks",
+    type=str,
+    default=None,
+    help="Comma-separated task ids to train (overrides --task / --all_tasks suite filter)",
+  )
   parser.add_argument("--dataset", type=str, default=None, help="Override HF dataset id")
   parser.add_argument(
     "--episode",
@@ -985,53 +1298,33 @@ def main() -> None:
                       help="Skip grid search; train with --leaky_rate and --ridge_alpha only")
   parser.add_argument("--jerk_weight", type=float, default=1.0,
                       help="Weight for jerk vs MSE in best-model selection score")
+  parser.add_argument(
+    "--continue_on_error",
+    action="store_true",
+    help="With --all_tasks / --tasks: log failures and continue the suite",
+  )
   args = parser.parse_args()
   maybe_print_tasks_and_exit(args)
-  task = get_task(args.task)
-  dataset_id = args.dataset or task.primary_dataset_id
 
-  if not torch.cuda.is_available() and args.device.startswith("cuda"):
-    raise RuntimeError("CUDA is required for this script (target: Tesla V100).")
-
-  device = torch.device(args.device)
-  logger.info("Device: %s (%s)", device, torch.cuda.get_device_name(device))
-  logger.info("Task=%s | unnorm_key=%s | dataset=%s", task.id, task.unnorm_key, dataset_id)
-
-  if args.episode is not None:
-    train_episodes = [int(args.episode)]
+  if args.tasks:
+    task_ids = [t.strip() for t in args.tasks.split(",") if t.strip()]
+  elif args.all_tasks:
+    task_ids = list(ESN_SUITE_TASK_IDS)
   else:
-    train_episodes = resolve_task_episode_spec(args.train_episodes, dataset_id=dataset_id)
-  if args.max_train_episodes is not None:
-    train_episodes = train_episodes[: max(0, int(args.max_train_episodes))]
-  heldout_episodes = resolve_task_episode_spec(args.heldout_episodes, dataset_id=dataset_id)
-  if args.max_heldout_episodes is not None:
-    heldout_episodes = heldout_episodes[: max(0, int(args.max_heldout_episodes))]
-  if args.sweep_episodes:
-    sweep_episodes = resolve_task_episode_spec(args.sweep_episodes, dataset_id=dataset_id)
-  else:
-    sweep_episodes = [train_episodes[0]]
+    task_ids = [get_task(args.task).id]
 
-  logger.info("Loading dataset %s ...", dataset_id)
-  dataset = load_dataset(dataset_id, split="train")
-  logger.info(
-    "Train eps=%d %s… | sweep eps=%s | held-out eps=%d %s…",
-    len(train_episodes),
-    train_episodes[:5],
-    sweep_episodes,
-    len(heldout_episodes),
-    heldout_episodes[:5],
-  )
+  # Validate early
+  for tid in task_ids:
+    get_task(tid)
 
-  # Sweep uses (pooled) first sweep episode by default for speed.
-  sweep_js, sweep_vla = load_episode_tensors(dataset, sweep_episodes[0], device)
-  if len(sweep_episodes) > 1:
-    logger.info(
-      "Note: hyperparam sweep uses episode %d only; final fit uses all train episodes.",
-      sweep_episodes[0],
-    )
-  sweep_gt = sweep_js.clone()
-
-  base_cfg = ESNCudaConfig(
+  common_kwargs = dict(
+    dataset_id=args.dataset if len(task_ids) == 1 else None,
+    train_episodes_spec=args.train_episodes,
+    heldout_episodes_spec=args.heldout_episodes,
+    sweep_episodes_spec=args.sweep_episodes,
+    max_train_episodes=args.max_train_episodes,
+    max_heldout_episodes=args.max_heldout_episodes,
+    episode=args.episode if len(task_ids) == 1 else None,
     reservoir_size=args.reservoir_size,
     spectral_radius=args.spectral_radius,
     sparsity=args.sparsity,
@@ -1040,107 +1333,49 @@ def main() -> None:
     ridge_alpha=args.ridge_alpha,
     washout=args.washout,
     seed=args.seed,
+    device=args.device,
+    skip_sweep=args.skip_sweep,
+    jerk_weight=args.jerk_weight,
   )
 
-  from src.unifolm_tasks import esn_checkpoint_basename
-
-  out_dir = models_path(esn_checkpoint_basename(task.id))
-  if task.id == "wipe_table":
-    sweep_dir = results_path("step2_training")
-  else:
-    sweep_dir = results_path("step2_training", task.id)
-
-  if args.skip_sweep:
-    esn = EchoStateNetwork(base_cfg, device=device).to(device)
+  summaries: List[Dict[str, Any]] = []
+  if len(task_ids) > 1:
     logger.info(
-      "ESN init (no sweep) | N=%d | α_leak=%.2f | λ=%.1e",
-      base_cfg.reservoir_size,
-      base_cfg.leaky_rate,
-      base_cfg.ridge_alpha,
+      "Multi-task ESN suite (%d): %s",
+      len(task_ids),
+      ", ".join(task_ids),
     )
-    if len(train_episodes) == 1:
-      metrics = train_esn_on_episode(esn, sweep_js, sweep_vla, sweep_gt)
-    else:
-      metrics = train_esn_on_episodes(esn, dataset, train_episodes, device)
-    sweep_df = None
-  else:
-    sweep_df, best_row = run_hyperparameter_sweep(
-      base_cfg,
-      sweep_js,
-      sweep_vla,
-      sweep_gt,
-      device,
-      jerk_weight=args.jerk_weight,
+    logger.info(
+      "Default suite excludes dual_clean_table (%d single-embodiment tasks).",
+      len(list_esn_suite_tasks()),
     )
-    sweep_csv = sweep_dir / "esn_hyperparam_sweep.csv"
-    sweep_df.drop(columns=[], errors="ignore").to_csv(sweep_csv, index=False)
-    logger.info("Sweep results saved: %s", sweep_csv)
 
-    cfg = replace(
-      base_cfg,
-      leaky_rate=float(best_row["leaky_rate"]),
-      ridge_alpha=float(best_row["ridge_alpha"]),
-    )
-    esn = EchoStateNetwork(cfg, device=device).to(device)
-    if len(train_episodes) == 1:
-      esn, metrics = train_best_esn_from_sweep(
-        base_cfg, best_row, sweep_js, sweep_vla, sweep_gt, device,
-      )
-    else:
-      metrics = train_esn_on_episodes(esn, dataset, train_episodes, device)
-      metrics["selection_score"] = float(best_row["selection_score"])
+  for tid in task_ids:
+    try:
+      summary = run_training_for_task(tid, **common_kwargs)
+      summaries.append(summary)
+    except Exception as exc:
+      logger.exception("Task %s failed: %s", tid, exc)
+      fail_row = {
+        "task_id": tid,
+        "status": "error",
+        "error": str(exc),
+        "heldout_rmse_mean": float("nan"),
+        "heldout_rmse_std": float("nan"),
+        "checkpoint_dir": "",
+      }
+      summaries.append(fail_row)
+      if not args.continue_on_error and len(task_ids) > 1:
+        raise
 
-  metrics["step_hz"] = benchmark_step_hz(esn, esn.cfg.input_dim)
-  logger.info("Reservoir step throughput: %.1f Hz (target >100 Hz)", metrics["step_hz"])
-
-  heldout_rows: List[Dict[str, Any]] = []
-  heldout_mean: Dict[str, float] = {}
-  if heldout_episodes:
-    heldout_rows, heldout_mean = evaluate_esn_on_episodes(
-      esn, dataset, heldout_episodes, device,
-    )
-    held_csv = sweep_dir / "esn_heldout_eval.csv"
-    pd.DataFrame(heldout_rows).to_csv(held_csv, index=False)
-    (sweep_dir / "esn_heldout_summary.json").write_text(json.dumps(heldout_mean, indent=2))
-    logger.info("Held-out summary: %s", heldout_mean)
-    logger.info("Held-out per-episode CSV: %s", held_csv)
-
-  artifact_paths = save_checkpoint(
-    esn,
-    metrics,
-    out_dir,
-    episode_index=train_episodes[0],
-    train_episodes=train_episodes,
-    heldout_episodes=heldout_episodes,
-    heldout_metrics=heldout_mean or None,
-    dataset_id=dataset_id,
-    basename=BEST_CHECKPOINT_BASENAME,
-  )
-
-  print("\n" + "=" * 60)
-  print("  ESN CUDA Ridge Training — Phase 2 (multi-episode)")
-  print("=" * 60)
-  print(f"  Task            : {task.id} ({task.unnorm_key})")
-  print(f"  Dataset         : {dataset_id}")
-  print(f"  Train episodes  : {len(train_episodes)}  ({train_episodes[0]}…{train_episodes[-1]})")
-  print(f"  Held-out episodes: {len(heldout_episodes)}")
-  print(f"  Canonical split : train={len(TRAIN_EPISODES)} heldout={len(HELDOUT_EPISODES)}")
-  print(f"  VLA hold period : {VLA_HOLD_STEPS} steps ({VLA_HZ:.0f} Hz)")
-  print(f"  Reservoir N     : {esn.cfg.reservoir_size}")
-  print(f"  Best α_leak     : {metrics.get('leaky_rate', esn.cfg.leaky_rate):.2f}")
-  print(f"  Best ridge λ    : {metrics.get('ridge_alpha', esn.cfg.ridge_alpha):.1e}")
-  print(f"  Train-ref RMSE  : {metrics['rmse']:.6f} rad (ep {int(metrics.get('train_metrics_episode', train_episodes[0]))})")
-  if heldout_mean:
-    print(
-      f"  Held-out RMSE   : {heldout_mean['rmse_mean']:.6f} ± {heldout_mean['rmse_std']:.6f} rad "
-      f"(n={int(heldout_mean['n_episodes'])})"
-    )
-  print(f"  Step throughput : {metrics['step_hz']:.1f} Hz")
-  print(f"  Best .pth       : {artifact_paths['pth']}")
-  print(f"  Config JSON     : {artifact_paths['json']}")
-  if sweep_df is not None:
-    print(f"  Sweep CSV       : {sweep_dir / 'esn_hyperparam_sweep.csv'}")
-  print("=" * 60)
+  if len(summaries) > 1 or args.all_tasks:
+    paths = write_multitask_summary(summaries)
+    print("\nMulti-task summary written:")
+    print(f"  {paths['csv']}")
+    print(f"  {paths['json']}")
+    print(f"  Registry: {models_path('esn_task_registry.json')}")
+    ok = [s for s in summaries if s.get("status") == "ok"]
+    print(f"  Succeeded: {len(ok)}/{len(summaries)}")
 
 
 if __name__ == "__main__":
