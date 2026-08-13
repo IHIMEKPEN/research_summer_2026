@@ -1,0 +1,248 @@
+% NeurIPS 2026 — 8th Robot Learning Workshop (WRL)
+% Non-archival contributed paper (≤6 pages, NeurIPS format).
+% Sister draft: ../icra2027/
+
+\documentclass{article}
+% amsmath must load before neurips so it does not clobber NeurIPS \And.
+\usepackage{amsmath,amssymb}
+\usepackage[final]{neurips}
+
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\usepackage{xurl}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{placeins}
+\usepackage{enumitem}
+\usepackage{subcaption}
+
+\captionsetup{font=small,labelfont=bf,skip=4pt}
+\captionsetup[subfigure]{font=footnotesize,skip=2pt}
+
+\title{Closing the Frequency Gap:\\
+Deploying Vision-Language-Action Models\\
+on High-Rate Humanoid Control}
+
+\author{%
+  Osemudiamen Andrew Ihimekpen \And Lijun Qian \\[0.35em]
+  {\small Dept.\ of Electrical and Computer Engineering, CREDIT Center}\\
+  {\small Prairie View A\&M University, Prairie View, TX, USA}\\
+  {\small\texttt{oihimekpen\string@pvamu.edu} \quad \texttt{liqian\string@pvamu.edu}}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Foundation Vision-Language-Action (VLA) models unlock open-vocabulary manipulation, but measured inference rates remain incompatible with the 100\,Hz joint loops required by humanoid robots such as the Unitree G1 (29\,DoF).
+We study this \emph{frequency gap} as a Physical AI deployment bottleneck: on a DGX Station (Tesla V100), live \texttt{UnifoLM-VLA-Base} profiling on \texttt{G1\_Clean\_Table} yields a $\sim$57$\times$ gap to 100\,Hz (PyTorch mean \textbf{570.7\,ms} / \textbf{1.752\,Hz}; Nsight NVTX \textbf{593.7\,ms} / \textbf{1.684\,Hz}).
+We keep the VLA as a sparse language-conditioned intent generator and insert a fixed Echo State Network (ESN) reservoir that bridges held joint targets to smooth 100\,Hz commands; only a linear readout is trained by ridge regression.
+On \texttt{G1\_Dex1\_Wipe\_Table} (200 episodes, $\sim$0.70\,h; train $0$--$159$ / held-out $160$--$199$), a CUDA ESN ($\alpha{=}0.3$, $\lambda{=}1$) reaches held-out open-loop RMSE \textbf{$2.78\times10^{-3}\!\pm\!3.44\times10^{-3}$\,rad} ($\sim$5.6$\times$ better than linear upsampling) and MuJoCo dataset-oracle RMSE \textbf{$3.00\times10^{-3}\!\pm\!3.56\times10^{-3}$\,rad} (grasp/task success \textbf{100\%}; mean table-contact \textbf{74.5\%}).
+Live dual-process control clears 100\,Hz on average (ESN mean 6.92\,ms / 145\,Hz) with GPU-contention tails above 10\,ms.
+Live wipe trials succeed under a disclosed geometric press prior for both ESN and ZOH; under that tied success regime, ESN joint RMSE is $\sim$14$\times$ lower than ZOH (0.514 vs.\ 7.17\,rad), while open-loop ZOH remains $50\times$ jerkier than linear---motivating S2R/DIRT transfer rather than claiming zero-shot press-from-vision.
+\end{abstract}
+
+\section{Introduction}
+\subsection{Motivation: Why VLAs Break on Humanoids}
+Foundation VLAs such as OpenVLA~\cite{OpenVLA2025}, $\pi_0$~\cite{Preprints2026}, and Unitree UnifoLM-VLA~\cite{UnifoLM2026} map language and vision to robot actions and have unlocked open-vocabulary manipulation on fixed-base arms.
+Humanoid whole-body control is a different regime~\cite{PhysicalAI2026}: the Unitree G1 exposes a \textbf{29-DoF} joint interface that must be served near \textbf{100\,Hz} (10\,ms) for balance-preserving tracking, contact-rich wiping, and safe impedance behavior.
+Under a naive zero-order hold (ZOH), each sparse VLA target is frozen for tens of control ticks; staircase joint trajectories inject high jerk and fail contact tasks even when the semantic plan is correct.
+We call this mismatch the \emph{frequency gap}: the VLA may be ``right'' about \emph{what} to do, yet too slow for \emph{how} the humanoid must move.
+
+This paper contributes a systems perspective to Physical AI deployment rather than a new zero-shot foundation policy.
+The control layer must be \emph{cheap} and preferably trained without backpropagation through time, because lab/edge GPUs are already saturated by vision--language backbones.
+Classical upsamplers (ZOH, linear interpolation, joint PID) ignore proprioceptive state between VLA updates and cannot learn demonstration-consistent dynamics.
+
+\subsection{Approach and Scope}
+We insert a leaky Echo State Network (ESN) between measured VLA intents ($\sim$1.7\,Hz on UnifoLM-VLA-Base) and joint commands (100\,Hz).
+The VLA supplies sparse targets $q^{\star}_{\mathrm{VLA}}$; the reservoir supplies reflexive temporal filtering with a ridge-trained linear readout and \emph{fixed} recurrent weights.
+Training and evaluation use Unitree's public \texttt{G1\_Dex1\_Wipe\_Table} demonstrations (Sec.~\ref{sec:dataset}).
+
+\textbf{Contributions.}
+(i)~Dual-instrument UnifoLM-VLA-Base latency quantifying a $\sim$57--59$\times$ gap to 100\,Hz;
+(ii)~CUDA ESN with $u(t)=[q_t;\,q^{\star}_{\mathrm{VLA}}]\in\mathbb{R}^{58}$, ridge readout, declared train/held-out split, and a per-task checkpoint library for the UnifoLM G1 suite;
+(iii)~GIL-free dual-process MuJoCo$+$bridge timing under live UnifoLM (ESN vs.\ ZOH / linear / PID);
+(iv)~MuJoCo wipe-table \emph{dataset-oracle} evaluation on all 40 held-out episodes;
+(v)~Live UnifoLM wipe-success trials with interactive cloth, including disclosed geometric priors and failure modes;
+(vi)~S2R ZMQ deploy package (29-DoF defaults) for DIRT-guided transfer (in progress).
+
+\section{Related Work}
+VLA surveys highlight bimanual and whole-body settings as hard cases~\cite{VLA_Review2026}.
+Flow matching accelerates action generation~\cite{Preprints2026}; recurrent bridges such as xLSTM help long-horizon memory~\cite{Notes2Self2026}.
+Diffusion action chunking trades compute for smoothness; reservoir computing offers fast, training-light dynamics~\cite{Jaeger2001,Caoetal2023}.
+We combine a frozen reservoir with a language-conditioned VLA rather than replacing either.
+
+\section{Method}
+\subsection{System Architecture}
+Figure~\ref{fig:architecture} summarizes the hybrid stack: UnifoLM emits sparse EE intents, an IK bridge lifts them to 29-D joint targets, and a fixed ESN reservoir with ridge readout produces 100\,Hz commands conditioned on proprioception.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/fig1_architecture.pdf}
+\caption{VLA$+$ESN architecture for Unitree G1 (29\,DoF). UnifoLM-VLA-Base runs at $\sim$1.75\,Hz on a DGX V100; the ESN bridge closes the $\sim$57$\times$ gap to the 100\,Hz joint loop.}
+\label{fig:architecture}
+\end{figure}
+
+\begin{itemize}[leftmargin=1.15em,itemsep=0.2em,topsep=0.3em]
+  \item \textbf{Perception / VLA:} \texttt{UnifoLM-VLA-Base} emits \textbf{23-D end-effector} action chunks; a Jacobian \textbf{IK bridge} maps EE poses to 29-D joint targets.
+  \item \textbf{ESN bridge:} Leaky reservoir
+  \[
+  x(t)=(1-\alpha)x(t-1)+\alpha\,\tanh\!\big(W_{\mathrm{res}}x(t-1)+W_{\mathrm{in}}u(t)\big),
+  \]
+  with sparse $W_{\mathrm{res}}$ ($N{=}1000$, $\rho{=}0.95$, sparsity $0.9$) and readout
+  $y(t)=W_{\mathrm{out}}[x(t);u(t)]$ fit by ridge regression on 100\,Hz joints with VLA tokens held for 50 ticks ($u\in\mathbb{R}^{58}$, $y\in\mathbb{R}^{29}$).
+  We sweep $\alpha\in\{0.05,0.1,0.3\}$ and $\lambda\in\{10^{-4},10^{-2},1\}$ and select by RMSE$\times$jerk score.
+  \item \textbf{S2R / DIRT layer:} Parameterizes sim--real discrepancy for controller and domain ablations (ESN vs.\ passthrough ZOH/raw).
+\end{itemize}
+
+\subsection{Baselines}
+(1)~Pure VLA ZOH; (2)~VLA $+$ linear interpolation; (3)~VLA $+$ PID; (4)~VLA $+$ ESN (ours).
+
+\section{Experiments}
+\subsection{Dataset, Setup, and Metrics}
+\label{sec:dataset}
+All ESN training, offline upsample baselines, and MuJoCo wipe-oracle evaluations use the
+Hugging Face dataset \texttt{G1\_Dex1\_Wipe\_Table} (\texttt{unitreerobotics}; \texttt{train} split):
+\textbf{200} episodes ($75{,}909$ frames; $\sim$0.70\,h), train episodes $0$--$159$ / held-out $160$--$199$.
+Detailed wipe claims are restricted to this corpus; the stack supports a per-task ESN library over the UnifoLM G1 suites.
+Robot / hardware: Unitree G1 (29\,DoF); NVIDIA DGX Station, Tesla V100-DGXS-32GB.
+Profiling: live UnifoLM-VLA-Base on G1 Clean-Table (FP16).
+Metrics: task success (grasp / wipe contact), joint RMSE, trajectory jerk, control Hz / step latency, GPU memory, parse failure rate.
+
+\subsection{Measured Status}
+Table~\ref{tab:measured} summarizes the campaign; Table~\ref{tab:offline} breaks out open-loop held-out RMSE and jerk (the differentiator when live task success ties); Table~\ref{tab:multitask} shows the same ESN bridge on two additional UnifoLM G1 skills (open-loop only).
+Figure~\ref{fig:latency} shows the measured frequency gap; Fig.~\ref{fig:baselines} open-loop held-out RMSE; Fig.~\ref{fig:rates} live dual-process timing; Fig.~\ref{fig:oracle} oracle held-out wipe metrics; Fig.~\ref{fig:contact} the contact ladder.
+
+\begin{table}[t]
+\centering
+\caption{Measured results on DGX Station (V100), 5~Aug~2026 campaign (held-out wipe unless noted).}
+\label{tab:measured}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}llp{0.50\linewidth}@{}}
+\toprule
+\textbf{Stage} & \textbf{Metric} & \textbf{Value / notes} \\
+\midrule
+PyTorch & Mean latency / rate / gap & 570.7\,ms / 1.752\,Hz / $57.1\times$ ($n{=}100$) \\
+Nsight & NVTX mean / gap & 593.7\,ms / $59.4\times$; GEMM + H2D heavy \\
+ESN ridge & Held-out RMSE & $2.78\times10^{-3}\!\pm\!3.44\times10^{-3}$\,rad ($\alpha{=}0.3$, $\lambda{=}1$) \\
+Offline & ESN vs.\ linear & $\sim$5.6$\times$ lower RMSE; ZOH jerk $50\times$ linear \\
+Dual-process & Live ESN mean / rate & 6.92\,ms / 145\,Hz (steady max 12.6\,ms) \\
+MuJoCo oracle & RMSE / grasp / contact & $3.00\times10^{-3}$\,rad; 100\% / 74.5\% ($n{=}40$) \\
+Live wipe & Contact / task (ESN \& ZOH) & 100\% / yes (same \texttt{press\_table} prior; 30\,s) \\
+Live wipe & Joint RMSE (ESN vs.\ ZOH) & \textbf{0.514} vs.\ 7.17\,rad ($\sim$14$\times$ lower) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Open-loop held-out upsample quality on wipe eps $160$--$199$ ($n{=}40$). Jerk ratio is relative to linear (ref.\ $=1$).}
+\label{tab:offline}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Method} & \textbf{Joint RMSE (rad)} & \textbf{Jerk ratio} \\
+\midrule
+ZOH & $5.39\times10^{-2}\!\pm\!9.44\times10^{-3}$ & $50\times$ \\
+Linear & $1.55\times10^{-2}\!\pm\!3.93\times10^{-3}$ & $1$ (ref.) \\
+PID & $7.14\times10^{-2}\!\pm\!1.19\times10^{-2}$ & $1.43\times$ \\
+\textbf{ESN (ours)} & $\mathbf{2.78\times10^{-3}\!\pm\!3.44\times10^{-3}}$ & $1.44\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Per-task ESN open-loop held-out joint RMSE (same $\alpha{=}0.3$, $\lambda{=}1$, 80/20 episode split). Not live multi-task success.}
+\label{tab:multitask}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Task} & \textbf{Held-out $n$} & \textbf{Joint RMSE (rad)} \\
+\midrule
+\texttt{wipe\_table} (primary) & 40 & $2.78\times10^{-3}\!\pm\!3.44\times10^{-3}$ \\
+\texttt{clean\_table} & 40 & $3.68\times10^{-3}\!\pm\!6.72\times10^{-3}$ \\
+\texttt{stack\_block} & 40 & $4.25\times10^{-3}\!\pm\!2.84\times10^{-3}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig2_latency_gap.pdf}
+  \caption{Frequency gap (PyTorch $n{=}100$).}
+  \label{fig:latency}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig4_offline_baselines.pdf}
+  \caption{Open-loop held-out RMSE.}
+  \label{fig:baselines}
+\end{subfigure}
+\caption{Latency gap and open-loop upsample baselines on held-out wipe episodes.}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig7_control_rates.pdf}
+  \caption{Live dual-process timing.}
+  \label{fig:rates}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig8_oracle_heldout.pdf}
+  \caption{MuJoCo dataset-oracle ESN.}
+  \label{fig:oracle}
+\end{subfigure}
+\caption{Live dual-process rates and held-out MuJoCo oracle wipe metrics.}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.88\linewidth]{figures/fig6_contact_ladder.pdf}
+\caption{Contact ladder: oracle demo tokens (74.5\%) vs.\ live UnifoLM without \texttt{press\_table} ($\sim$5\% collapse) vs.\ live ESN/ZOH with disclosed geometric press prior (100\%).}
+\label{fig:contact}
+\end{figure}
+
+\FloatBarrier
+\section{Discussion and Limitations}
+\paragraph{Frequency gap.}
+Two instruments cross-validate $\sim$57--59$\times$ to 100\,Hz; both attribute GPU time to large GEMMs, with Nsight additionally highlighting H2D pressure.
+
+\paragraph{Data scope.}
+One wipe task for closed-loop claims, $\sim$0.7\,h of Dex1 demos, episode-level 80/20 split.
+Open-loop held-out joint RMSE stays in the $10^{-3}$\,rad regime on \texttt{clean\_table} and \texttt{stack\_block} as well (Table~\ref{tab:multitask})---evidence that the bridge is not wipe-only---but this is \emph{not} live multi-task or zero-shot competence.
+
+\paragraph{ESN, timing, and honest live findings.}
+Held-out open-loop ESN RMSE is $\sim$5.6$\times$ better than linear, with jerk near the linear reference ($1.44\times$) while ZOH is $50\times$ jerkier (Table~\ref{tab:offline}).
+Live dual-process ESN clears 100\,Hz mean (145\,Hz) with GPU-contention tails above 10\,ms.
+Oracle wipe succeeds when demo tokens drive the ESN.
+Matching live UnifoLM wipe trials attach under a proximity-synthetic grasp; without a table-plane press prior the VLA lifts the cloth and contact collapses ($\sim$5\%).
+Enabling \texttt{press\_table} restores 100\% contact and task success for \emph{both} ESN and ZOH---a geometric wipe prior, not learned press-from-vision.
+Under that tied success regime, ESN still tracks joints $\sim$14$\times$ tighter than ZOH (0.514 vs.\ 7.17\,rad RMSE over 30\,s), which is the systems reason to prefer the reservoir bridge even when binary task gates do not separate methods.
+We treat the press-prior dependence as a deployment / negative-result style observation aligned with the workshop's interest in real-world failure analysis.
+
+\section{Conclusion}
+We presented a VLA$+$ESN architecture targeting the $\sim$57$\times$ gap between measured UnifoLM-VLA-Base inference and G1 100\,Hz control.
+The ESN closes rate, tracking, and jerk gaps under declared data splits; when live wipe success is tied by a disclosed geometric prior, joint RMSE still favors ESN over ZOH by $\sim$14$\times$.
+S2R/DIRT transfer on Jetson$\rightarrow$G1 is the next step toward Physical AI deployment claims beyond simulation.
+
+\begin{ack}
+Supported in part by ARO Cooperative Agreement W911NF-24-2-0133.
+\end{ack}
+
+\bibliographystyle{unsrtnat}
+{\small
+\bibliography{references}
+}
+
+\end{document}

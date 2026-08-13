@@ -1,0 +1,53 @@
+{
+  "campaign": "NeurIPS WRL boost: offline jerk ratios + live joint RMSE (when task success ties)",
+  "generated": "2026-08-13",
+  "sources": {
+    "offline_baselines": "results/step3_baselines/baseline_comparison_summary.json",
+    "esn_heldout": "results/step2_training/esn_task_registry_seed.json",
+    "live_esn": "results/step3_live_wipe/live_wipe_report_esn_live.json",
+    "live_zoh": "results/step3_live_wipe/live_wipe_report_zoh_live.json"
+  },
+  "offline_heldout_n40": {
+    "zoh": {
+      "rmse_mean": 0.05389775236986451,
+      "rmse_std": 0.00943537958869184,
+      "jerk_mean": 0.0001656578475376591,
+      "jerk_ratio_vs_linear": 50.0
+    },
+    "linear": {
+      "rmse_mean": 0.01548898104347289,
+      "rmse_std": 0.003930086040356295,
+      "jerk_mean": 3.3131569182387465e-06,
+      "jerk_ratio_vs_linear": 1.0
+    },
+    "pid": {
+      "rmse_mean": 0.0713566732969041,
+      "rmse_std": 0.011902715967998438,
+      "jerk_mean": 4.72145055709916e-06,
+      "jerk_ratio_vs_linear": 1.425
+    },
+    "esn": {
+      "rmse_mean": 0.0027750881633227665,
+      "rmse_std": 0.0034445573325602376,
+      "jerk_mean": 4.757448931513864e-06,
+      "jerk_ratio_vs_linear": 1.436
+    }
+  },
+  "live_wipe_press_table_30s": {
+    "note": "Both ESN and ZOH reach 100% contact / task success under disclosed press_table prior; joint RMSE separates them.",
+    "esn": {
+      "joint_rmse_rad": 0.5142611146230418,
+      "wipe_path_length_m": 11.78283632755263,
+      "table_contact_ratio": 1.0,
+      "task_success": true
+    },
+    "zoh": {
+      "joint_rmse_rad": 7.166067765297948,
+      "wipe_path_length_m": 15.591313100611938,
+      "table_contact_ratio": 1.0,
+      "task_success": true
+    },
+    "joint_rmse_ratio_zoh_over_esn": 13.93468718814321
+  },
+  "ee_rmse_note": "right_ee_rmse_m is identical (0.09626) across ESN/ZOH/oracle in current logs (fallback/variance path when EE targets missing); do NOT claim EE RMSE differentiation. Use joint RMSE + jerk instead."
+}

@@ -1,0 +1,55 @@
+{
+  "campaign": "NeurIPS WRL multi-task ESN table (zero-GPU aggregate)",
+  "generated": "2026-08-13",
+  "claim_scope": "Open-loop held-out joint RMSE only; not live multi-task success; wipe remains closed-loop story.",
+  "config": {
+    "leaky_rate": 0.3,
+    "ridge_alpha": 1.0,
+    "split": "80/20 episode"
+  },
+  "rows_for_paper": [
+    {
+      "task_id": "wipe_table",
+      "dataset": "G1_Dex1_Wipe_Table",
+      "n_heldout": 40,
+      "rmse_mean": 0.0027750881633227665,
+      "rmse_std": 0.0034445573325602376,
+      "source": "step2_training/esn_task_registry_seed.json"
+    },
+    {
+      "task_id": "clean_table",
+      "dataset": "G1_Clean_Table (UnifoLM suite)",
+      "n_heldout": 40,
+      "rmse_mean": 0.003679549361694787,
+      "rmse_std": 0.006718069911755266,
+      "source": "step2_training/clean_table/esn_heldout_summary.json"
+    },
+    {
+      "task_id": "stack_block",
+      "dataset": "G1 stack_block suite",
+      "n_heldout": 40,
+      "rmse_mean": 0.00425132318278877,
+      "rmse_std": 0.002835067964967074,
+      "source": "step2_training/stack_block/esn_heldout_summary.json"
+    }
+  ],
+  "alternate_ok": {
+    "erase_board": {
+      "n_heldout": 40,
+      "rmse_mean": 0.007634067564691377,
+      "rmse_std": 0.006831683362312615
+    }
+  },
+  "avoid_short_table": [
+    "bag_insert",
+    "pack_pingpong"
+  ],
+  "laptop_caveat": "fold_towel/esn_heldout_summary.json on this laptop is a stale 4+2-ep run (rmse~0.81); DGX audit cites 1.05e-3\u00b11.05e-3 for full 160/40 \u2014 sync from DGX before using fold_towel in the paper.",
+  "live_joint_rmse_dual_row": {
+    "esn": 0.5142611146230418,
+    "zoh": 7.166067765297948,
+    "ratio_zoh_over_esn": 13.93468718814321,
+    "already_in_neurips_table1": true,
+    "source": "step3_evaluation/jerk_joint_rmse_boost_summary.json"
+  }
+}

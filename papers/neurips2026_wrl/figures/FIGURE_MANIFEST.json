@@ -1,0 +1,25 @@
+{
+  "generated_from_measured": true,
+  "mock": false,
+  "figures": [
+    "fig1_architecture.pdf",
+    "fig2_latency_gap.pdf",
+    "fig3_dataset_distribution.pdf",
+    "fig4_offline_baselines.pdf",
+    "fig5_hyperparam_sweep.pdf",
+    "fig6_contact_ladder.pdf",
+    "fig7_control_rates.pdf",
+    "fig8_oracle_heldout.pdf"
+  ],
+  "sources": {
+    "profiling": "/home/aihimekpen/research_summer_2026/research/results/step1_profiling_unifolm_vla0/pytorch_profiler_20260805_140730/profiling_report.json",
+    "dataset_card": "/home/aihimekpen/research_summer_2026/research/results/step2_training/dataset_card_wipe_table.json",
+    "esn_seed": "/home/aihimekpen/research_summer_2026/research/results/step2_training/esn_task_registry_seed.json",
+    "baselines": "/home/aihimekpen/research_summer_2026/research/results/step3_baselines/baseline_comparison_summary.json",
+    "dual_thread": "/home/aihimekpen/research_summer_2026/research/results/step3_dual_thread/dual_thread_summary_all_live.csv",
+    "live_wipe_esn": "/home/aihimekpen/research_summer_2026/research/results/step3_live_wipe/live_wipe_report_esn_live.json",
+    "mujoco_heldout": "/home/aihimekpen/research_summer_2026/research/results/step4_mujoco_evaluation/mujoco_eval_summary_heldout.json"
+  },
+  "paper_figures_dir": "robotics/papers/neurips2026_wrl/figures",
+  "sister_draft": "robotics/papers/icra2027/figures"
+}
