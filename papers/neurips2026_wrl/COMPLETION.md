@@ -38,7 +38,7 @@ Use this if you need to cut scope before **26 Aug**. Check boxes as you go.
 
 - [x] Send fit email to organizers (`EMAIL_TO_ORGANIZERS.md`) — **do this first**
 - [ ] Create / verify OpenReview accounts for **both** co-authors (verification can take up to **2 weeks**)
-- [ ] Replace draft `neurips.sty` with official NeurIPS author-kit style (current file is a close stand-in: Times, 5.5in text, page numbers only)
+- [ ] Drop official `neurips_2026.sty` into this folder (CDN not public yet; use author kit). `main.tex` already uses `\usepackage[sglblindworkshop]{neurips_2026}` + `\workshoptitle{...}`. Old `neurips.sty` kept as `neurips.sty.draft_backup`.
 - [ ] Build PDF cleanly: `latexmk -pdf main.tex` (or `pdflatex` ×2 + `bibtex`)
 - [ ] Confirm **≤6 pages** body (refs can follow NeurIPS workshop rules; verify on OpenReview page)
 - [ ] Title + abstract match workshop framing (deployment / VLA systems / failure analysis — not zero-shot)
@@ -165,7 +165,8 @@ latexmk -pdf main.tex
 | Path                     | Role                                         |
 | ------------------------ | -------------------------------------------- |
 | `main.tex`               | NeurIPS workshop draft (reframed)            |
-| `neurips.sty`            | **Draft** layout — replace with official kit |
+| `neurips_2026.sty`       | **Required** — drop from NeurIPS 2026 author kit |
+| `neurips.sty.draft_backup` | Old draft stand-in (do not submit with this) |
 | `references.bib`         | Shared cites (copied from ICRA)              |
 | `figures/`               | Measured figure PDFs                         |
 | `COMPLETION.md`          | This tracker                                 |

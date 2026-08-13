@@ -1,0 +1,77 @@
+{
+  "protocol": "ESN vs ZOH, press_table+clamps, 30s, held-out init eps 160/170/180, CUDA_VISIBLE_DEVICES=1, no video",
+  "n_seeds": 3,
+  "early_stop": "seed160 did NOT match ~14x joint RMSE; continued 170/180",
+  "do_not_report": [
+    "right_ee_rmse_m"
+  ],
+  "rows": [
+    {
+      "init_episode": 160,
+      "bridge": "esn",
+      "contact": 1.0,
+      "task_success": true,
+      "joint_rmse": 0.5186224414724518,
+      "control_hz": 135.5678583509424,
+      "wipe_path_m": 12.817897268737036,
+      "press_table": true,
+      "stabilize_motion": true
+    },
+    {
+      "init_episode": 160,
+      "bridge": "zoh",
+      "contact": 1.0,
+      "task_success": true,
+      "joint_rmse": 0.5411478302997299,
+      "control_hz": 210.38012902460343,
+      "wipe_path_m": 12.950692993980788,
+      "press_table": true,
+      "stabilize_motion": true
+    },
+    {
+      "init_episode": 170,
+      "bridge": "esn",
+      "contact": 1.0,
+      "task_success": true,
+      "joint_rmse": 0.5167819977404955,
+      "control_hz": 135.38487791358713,
+      "wipe_path_m": 13.945355450004074,
+      "press_table": true,
+      "stabilize_motion": true
+    },
+    {
+      "init_episode": 170,
+      "bridge": "zoh",
+      "contact": 1.0,
+      "task_success": true,
+      "joint_rmse": 0.52072264094787,
+      "control_hz": 191.77692387221586,
+      "wipe_path_m": 12.84027530148889,
+      "press_table": true,
+      "stabilize_motion": true
+    },
+    {
+      "init_episode": 180,
+      "bridge": "esn",
+      "contact": 1.0,
+      "task_success": true,
+      "joint_rmse": 0.5279227989777588,
+      "control_hz": 136.1536187560834,
+      "wipe_path_m": 13.18759188427547,
+      "press_table": true,
+      "stabilize_motion": true
+    },
+    {
+      "init_episode": 180,
+      "bridge": "zoh",
+      "contact": 1.0,
+      "task_success": true,
+      "joint_rmse": 0.5325603063898798,
+      "control_hz": 181.99029459953385,
+      "wipe_path_m": 13.581150267028335,
+      "press_table": true,
+      "stabilize_motion": true
+    }
+  ],
+  "note": "Under identical clamps, live joint RMSE is near-tied; prior ~14x ZOH RMSE likely from older ZOH run without same stabilizers or different conditions."
+}

@@ -1,13 +1,29 @@
 % NeurIPS 2026 — 8th Robot Learning Workshop (WRL)
 % Non-archival contributed paper (≤6 pages, NeurIPS format).
 % Sister draft: ../icra2027/
+%
+% Style: official neurips_2026.sty (author kit). Place it next to this file.
+% WRL CFP does not state blind mode; we use single-blind workshop (named authors).
+% Switch to [dblblindworkshop] + anonymized \author{} if OpenReview requires it.
+% After acceptance: \usepackage[sglblindworkshop, final]{neurips_2026}
 
 \documentclass{article}
-% amsmath must load before neurips so it does not clobber NeurIPS \And.
+
+% amsmath before neurips_2026 so it does not clobber NeurIPS \And.
 \usepackage{amsmath,amssymb}
-\usepackage[final]{neurips}
+
+% Submission (line numbers; named authors for single-blind workshop):
+\usepackage[sglblindworkshop]{neurips_2026}
+% Camera-ready after accept:
+% \usepackage[sglblindworkshop, final]{neurips_2026}
+% Double-blind workshop alternative:
+% \usepackage[dblblindworkshop]{neurips_2026}
+
+% Required for workshop tracks (footnote workshop name).
+\workshoptitle{8th Robot Learning Workshop: Is Physical AI Going Zero-Shot?}
 
 \usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
 \usepackage{hyperref}
 \usepackage{xurl}
 \usepackage{booktabs}
@@ -17,6 +33,8 @@
 \usepackage{placeins}
 \usepackage{enumitem}
 \usepackage{subcaption}
+\usepackage{microtype}
+\usepackage{xcolor}
 
 \captionsetup{font=small,labelfont=bf,skip=4pt}
 \captionsetup[subfigure]{font=footnotesize,skip=2pt}
