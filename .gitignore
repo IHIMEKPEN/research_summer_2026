@@ -60,6 +60,9 @@ research/**/*.mp4
 research/**/*.gif
 research/**/*.nsys-rep
 research/**/*.qdrep
+# Small paper showcase clips (oracle + live UnifoLM wipe; <2 MB total)
+!research/results/step4_mujoco_evaluation/table_wipe_ep160_oracle_esn.mp4
+!research/results/step3_live_wipe/live_wipe_esn_live.mp4
 
 # Portable TeX toolchain (download locally; do not commit binaries / caches)
 tools/tectonic
