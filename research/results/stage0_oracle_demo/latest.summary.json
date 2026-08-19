@@ -1,0 +1,14 @@
+{
+  "stage": 0,
+  "live_zmq": true,
+  "mode": "synthetic",
+  "token_addr": "tcp://*:5556",
+  "cmd_addr": "tcp://*:5557",
+  "seconds": 30.0,
+  "n_tokens": 29,
+  "n_cmds": 1422,
+  "token_hz_approx": 0.9666666666666667,
+  "cmd_hz_approx": 47.4,
+  "hardware_motion": false,
+  "log": "/Users/andrew/Downloads/research/robotics/research/results/stage0_oracle_demo/latest.jsonl"
+}

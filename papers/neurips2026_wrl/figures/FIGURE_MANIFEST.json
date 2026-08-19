@@ -2,14 +2,14 @@
   "generated_from_measured": true,
   "mock": false,
   "figures": [
-    "fig1_architecture.pdf",
-    "fig2_latency_gap.pdf",
-    "fig3_dataset_distribution.pdf",
-    "fig4_offline_baselines.pdf",
-    "fig5_hyperparam_sweep.pdf",
-    "fig6_contact_ladder.pdf",
-    "fig7_control_rates.pdf",
-    "fig8_oracle_heldout.pdf"
+    "fig1_architecture.png",
+    "fig2_latency_gap.png",
+    "fig3_dataset_distribution.png",
+    "fig4_offline_baselines.png",
+    "fig5_hyperparam_sweep.png",
+    "fig6_contact_ladder.png",
+    "fig7_control_rates.png",
+    "fig8_oracle_heldout.png"
   ],
   "sources": {
     "profiling": "/home/aihimekpen/research_summer_2026/research/results/step1_profiling_unifolm_vla0/pytorch_profiler_20260805_140730/profiling_report.json",
@@ -21,5 +21,6 @@
     "mujoco_heldout": "/home/aihimekpen/research_summer_2026/research/results/step4_mujoco_evaluation/mujoco_eval_summary_heldout.json"
   },
   "paper_figures_dir": "robotics/papers/neurips2026_wrl/figures",
-  "sister_draft": "robotics/papers/icra2027/figures"
+  "sister_draft": "robotics/papers/icra2027/figures",
+  "layout": "each campaign figure used standalone (PNG)"
 }

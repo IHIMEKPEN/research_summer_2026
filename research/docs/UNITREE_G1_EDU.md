@@ -50,6 +50,18 @@ Pub/sub socket map from the same whiteboard (demo / teaching topology — not id
 
 Official docs: [Unitree developer quick start](https://support.unitree.com/home/en/developer/Quick_start)
 
+**Bring-up order:** sense before control — [REAL_ROBOT_STAGES.md](REAL_ROBOT_STAGES.md)
+(Stage −2 connect → Stage −1 live camera/LiDAR → Stage 0+ oracle/ESN).
+
+```bash
+# Stage −1: lab camera pub + teammate YOLO/depth viewer (perception only by default)
+# terminal 1 on G1:
+python G1_camera_v2.py --fps 10
+# terminal 2:
+python scripts/G1_yolo_world_follow_v2.py --host 127.0.0.1
+# motion (optional, later): add --enable-motion --iface enP2p1s0
+```
+
 ## 2. Install SDK & R2S
 
 On the G1 (or a companion NUC on the same LAN):

@@ -1,0 +1,32 @@
+{
+  "campaign": "NeurIPS WRL live joint RMSE correction (n=3, matched press_table + clamps)",
+  "generated": "2026-08-13",
+  "supersedes": "jerk_joint_rmse_boost_summary.json live_wipe_press_table_30s (~14x claim)",
+  "offline_unchanged": {
+    "esn_heldout_rmse": "2.78e-3 ± 3.44e-3 rad",
+    "esn_vs_linear_rmse": "~5.6x",
+    "zoh_jerk_vs_linear": "50x",
+    "esn_jerk_vs_linear": "1.44x",
+    "note": "Offline open-loop claims remain valid and are the ESN differentiator."
+  },
+  "live_n3_matched_clamps": {
+    "protocol": "ESN vs ZOH, press_table=true, matched motion clamps, 30s, init eps 160/170/180",
+    "contact_task_success": "100% both methods all seeds",
+    "seeds": {
+      "ep160": {"esn": 0.519, "zoh": 0.541, "ratio_zoh_esn": 1.04},
+      "ep170": {"esn": 0.517, "zoh": 0.521, "ratio_zoh_esn": 1.01},
+      "ep180": {"esn": 0.528, "zoh": 0.533, "ratio_zoh_esn": 1.01}
+    },
+    "mean": {
+      "esn_joint_rmse_rad": 0.521,
+      "esn_std": 0.005,
+      "zoh_joint_rmse_rad": 0.532,
+      "zoh_std": 0.008,
+      "ratio_zoh_over_esn": 1.02
+    }
+  },
+  "paper_policy": {
+    "do_not_claim": "~14x live joint RMSE (artifact of mismatched ZOH clamps in single-seed run)",
+    "do_claim": "tied live success under disclosed priors; ESN wins offline RMSE/jerk; rate bridge to 100 Hz"
+  }
+}

@@ -254,6 +254,60 @@ def profile(
     raise SystemExit(subprocess.call(cmd))
 
 
+@app.command("sense-check")
+def sense_check_cmd(
+    camera: str = typer.Option("0", "--camera", help="OpenCV index or path (/dev/video0)"),
+    seconds: float = typer.Option(10.0, "--seconds", help="How long to sample the camera"),
+    width: int = typer.Option(640, "--width"),
+    height: int = typer.Option(480, "--height"),
+    show: bool = typer.Option(False, "--show", help="Open a live OpenCV window (needs display)"),
+    out: str = typer.Option("results/sense_check/latest.json", "--out"),
+    skip_lidar: bool = typer.Option(False, "--skip-lidar"),
+) -> None:
+    """Stage −1: live camera (+ optional LiDAR) and measure ingest / process rates."""
+    _ensure_path()
+    from s2r.experiments.sense_check import run_sense_check
+
+    report = run_sense_check(
+        camera=camera,
+        seconds=seconds,
+        width=width,
+        height=height,
+        show=show,
+        out=out,
+        skip_lidar=skip_lidar,
+    )
+    cam = report["camera"]
+    lidar = report["lidar"]
+    if cam.get("ok"):
+        console.print(
+            f"[green]camera ok[/] source={cam['source']} "
+            f"{cam['width']}x{cam['height']} "
+            f"capture_hz={cam['capture_hz']:.1f} "
+            f"grab_ms={cam['mean_grab_ms']:.1f} process_ms={cam['mean_process_ms']:.1f}"
+        )
+        if cam.get("sample_path"):
+            console.print(f"  sample → {cam['sample_path']}")
+        if cam.get("devices"):
+            console.print(f"  /dev video devices: {', '.join(cam['devices'])}")
+    else:
+        console.print(f"[red]camera failed[/] {cam.get('error')}")
+        if cam.get("devices"):
+            console.print(f"  devices seen: {', '.join(cam['devices'])}")
+    if lidar.get("ok"):
+        console.print(
+            f"[green]lidar ok[/] backend={lidar['backend']} "
+            f"topic={lidar.get('topic_or_channel')} hz≈{lidar.get('hz', 0):.1f}"
+        )
+    else:
+        console.print(f"[yellow]lidar[/] backend={lidar.get('backend')} — {lidar.get('error') or 'not streaming'}")
+    for note in lidar.get("notes") or []:
+        console.print(f"  • {note}")
+    console.print(f"[green]wrote[/] {report.get('out', out)}")
+    if not cam.get("ok"):
+        raise typer.Exit(1)
+
+
 @app.command()
 def version() -> None:
     from s2r import __version__

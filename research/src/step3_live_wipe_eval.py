@@ -34,7 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from src.mujoco_wipe_scene import RIGHT_HAND_BODY, TABLE_TOP_Z
+from src.g1_dex1 import RIGHT_DEX1_PALM
+from src.mujoco_wipe_scene import TABLE_TOP_Z
 from src.paths import models_path, results_path
 from src.step3_control_baselines import online_linear_command, online_pid_command
 from src.step3_dual_thread_mujoco import (
@@ -276,17 +277,19 @@ def _live_wipe_control_worker(
             )
             prev_cmd = cmd_np.astype(np.float32).copy()
 
-            env.apply_unified_control(cmd_np)
-            env.step_physics()
-
             right_g = 4.5
             left_g = 4.5
             if env.cloth is not None:
                 right_g = env.cloth.synthetic_gripper_from_proximity()
+
+            env.apply_unified_control(cmd_np, left_gripper=left_g, right_gripper=right_g)
+            env.step_physics()
+
+            if env.cloth is not None:
                 if env.update_cloth(right_g, left_g):
                     grasp_frames += 1
                 hand_attach, _ = env.cloth._hand_target_pose()
-                right_id = env.model.body(RIGHT_HAND_BODY).id
+                right_id = env.model.body(RIGHT_DEX1_PALM).id
                 right_hand_pos = np.asarray(env.data.xpos[right_id], dtype=np.float64)
                 err_sq = float(np.mean((env.get_joint_positions() - curr_token) ** 2))
                 metrics_rec.record_step(

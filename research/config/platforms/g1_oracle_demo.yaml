@@ -1,0 +1,60 @@
+# Stage 0 — oracle wipe demo only (no live VLA). Keep g1.mock true.
+pipeline:
+  name: s2r-g1-oracle-demo
+  mode: g1
+  bind_host: 127.0.0.1
+  control_engine: esn
+zmq:
+  state_pub: tcp://127.0.0.1:5555
+  action_token_pub: tcp://127.0.0.1:5556
+  joint_cmd_pub: tcp://127.0.0.1:5557
+  decision_pub: tcp://127.0.0.1:5558
+  map_pub: tcp://127.0.0.1:5559
+  data_push: tcp://127.0.0.1:5560
+  gui_pub: tcp://127.0.0.1:5561
+  perception_pub: tcp://127.0.0.1:5562
+  mission_pub: tcp://127.0.0.1:5563
+  camera_pub: tcp://127.0.0.1:5564
+  sndhwm: 1000
+  rcvhwm: 1000
+  linger_ms: 0
+  conflate: true
+robot:
+  n_joints: 29
+  control_hz: 100
+  platform: unitree_g1_29dof
+mission:
+  task: wipe_table
+  instruction: Wipe the table with the cloth. (ORACLE DEMO — not live VLA)
+  rate_hz: 5.0
+vla:
+  rate_hz: 2.0
+  action_dim: 29
+  mock: true
+esn:
+  target_hz: 100
+  model_path: data/models/esn_g1_29dof.npz
+g1:
+  mock: true
+  mode: high_level
+  iface: eth0
+  network: 192.168.123.161
+  control_hz: 100
+data_collection:
+  enabled: true
+  out_dir: data/raw/stage0_oracle
+  flush_every: 25
+gui:
+  host: 0.0.0.0
+  port: 8080
+  history: 400
+deploy:
+  nodes:
+  - gui
+  - data_collector
+  - esn
+  - g1_bridge
+oracle:
+  episode: 160
+  dataset: unitreerobotics/G1_Dex1_Wipe_Table
+  enabled: true

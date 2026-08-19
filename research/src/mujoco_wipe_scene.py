@@ -14,12 +14,21 @@ from typing import Optional, Tuple
 import mujoco
 import numpy as np
 
+from src.g1_dex1 import (
+    DEX1_CLOTH_HAND_OFFSET,
+    hide_non_dex1_hand_geoms,
+    materialize_g1_dex1_mjcf,
+    resolve_wipe_hand_body,
+)
 from src.vla_ee_bridge import resolve_robot_mjcf
 
 CLOTH_BODY_NAME = "wipe_cloth"
 CLOTH_GEOM_NAME = "wipe_cloth_geom"
-RIGHT_HAND_BODY = "right_wrist_yaw_link"
-LEFT_HAND_BODY = "left_wrist_yaw_link"
+# Fallback if a model has no Dex1 palm yet (should not happen after overlay).
+RIGHT_HAND_BODY = "right_dex1_base_link"
+LEFT_HAND_BODY = "left_dex1_base_link"
+RIGHT_WRIST_FALLBACK = "right_wrist_yaw_link"
+LEFT_WRIST_FALLBACK = "left_wrist_yaw_link"
 
 # Dex1 gripper width (rad): ~4.5 open, ~0.45 closed on G1_Dex1_Wipe_Table.
 GRIPPER_OPEN_TYPICAL = 4.5
@@ -62,7 +71,7 @@ def build_wipe_table_scene_model(
     interactive_cloth: bool = True,
 ) -> mujoco.MjModel:
     """Compile G1 + table; cloth is a mocap body when ``interactive_cloth``."""
-    robot_mjcf = robot_mjcf.resolve()
+    robot_mjcf = materialize_g1_dex1_mjcf(robot_mjcf.resolve())
     hx, hy, hz = CLOTH_HALF_EXTENTS
     tx, ty, tz = TABLE_BODY_POS
     thx, thy, thz = TABLE_TOP_HALF_EXTENTS
@@ -109,9 +118,13 @@ def build_wipe_table_scene_model(
         )
         scene_path.write_text(scene_xml, encoding="utf-8")
     try:
-        return mujoco.MjModel.from_xml_path(str(scene_path))
+        model = mujoco.MjModel.from_xml_path(str(scene_path))
+        hide_non_dex1_hand_geoms(model)
+        return model
     finally:
         scene_path.unlink(missing_ok=True)
+        if robot_mjcf.name.startswith("_g1_dex1_runtime"):
+            robot_mjcf.unlink(missing_ok=True)
 
 
 def _body_id(model: mujoco.MjModel, name: str) -> int:
@@ -181,8 +194,11 @@ class WipeClothController:
         self._cloth_mocap_id = int(self.model.body_mocapid[self._cloth_body_id])
         if self._cloth_mocap_id < 0:
             raise ValueError(f"Body {CLOTH_BODY_NAME} is not a mocap body.")
-        self._right_hand_id = _body_id(self.model, RIGHT_HAND_BODY)
+        hand_name = resolve_wipe_hand_body(self.model, fallback=RIGHT_WRIST_FALLBACK)
+        self._right_hand_id = _body_id(self.model, hand_name)
         self.table_pos = np.asarray(self.table_pos, dtype=np.float64)
+        if np.allclose(self.hand_offset, CLOTH_HAND_OFFSET) and hand_name == RIGHT_HAND_BODY:
+            self.hand_offset = DEX1_CLOTH_HAND_OFFSET.copy()
         self.hand_offset = np.asarray(self.hand_offset, dtype=np.float64)
         self.reset()
 

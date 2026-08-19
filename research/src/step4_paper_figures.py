@@ -6,7 +6,7 @@ Outputs (PDF + PNG) under:
   papers/icra2027/figures/   (synced for \includegraphics)
 
 Figures:
-  fig1_architecture       UnifoLM → IK → ESN → G1 @ 100 Hz
+  fig1_architecture       Frozen UnifoLM → Jacobian IK hold → ESN+W_out → MuJoCo PD @ 100 Hz
   fig2_latency_gap        Step-1 PyTorch latency (n=100) + frequency gap
   fig3_dataset_distribution  Wipe-table episode lengths + train/held-out split
   fig4_offline_baselines  Held-out open-loop RMSE (ZOH / linear / PID / ESN)
@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 FIGURES_DIR = results_path("step4_paper_figures")
 PAPER_FIG_DIR = RESEARCH_ROOT.parent / "papers" / "icra2027" / "figures"
+WRL_FIG_DIR = RESEARCH_ROOT.parent / "papers" / "neurips2026_wrl" / "figures"
 
 # Frozen Aug-2025/2026 campaign paths (do not use smoke-overwritten latest stubs).
 PROFILE_REPORT = result_file(
@@ -97,14 +98,17 @@ def _load_json(path: Path) -> Dict[str, Any]:
 def _save(fig: plt.Figure, stem: str) -> Path:
   FIGURES_DIR.mkdir(parents=True, exist_ok=True)
   PAPER_FIG_DIR.mkdir(parents=True, exist_ok=True)
+  WRL_FIG_DIR.mkdir(parents=True, exist_ok=True)
   pdf = FIGURES_DIR / f"{stem}.pdf"
   png = FIGURES_DIR / f"{stem}.png"
   fig.savefig(pdf)
   fig.savefig(png)
   plt.close(fig)
   for ext in (".pdf", ".png"):
-    shutil.copy2(FIGURES_DIR / f"{stem}{ext}", PAPER_FIG_DIR / f"{stem}{ext}")
-  logger.info("Saved %s (+ paper sync)", pdf)
+    src = FIGURES_DIR / f"{stem}{ext}"
+    shutil.copy2(src, PAPER_FIG_DIR / f"{stem}{ext}")
+  shutil.copy2(png, WRL_FIG_DIR / f"{stem}.png")
+  logger.info("Saved %s (+ ICRA PDF/PNG, WRL PNG)", pdf)
   return pdf
 
 
@@ -121,53 +125,239 @@ def _esn_wipe_metrics() -> Dict[str, float]:
 
 # ── Fig 1: Architecture ───────────────────────────────────────
 def fig1_architecture() -> Path:
-  fig, ax = plt.subplots(figsize=(7.2, 2.6))
-  ax.set_xlim(0, 14)
-  ax.set_ylim(0, 5)
+  """Two-rate stack as implemented: frozen UnifoLM (Process A) → Jacobian IK
+  hold → fixed ESN + ridge W_out (Process B) → MuJoCo PD @ 100 Hz.
+
+  Cross-checked against step1 (UnifoLM-VLA-Base FP16, 23-D G1_EE_6D),
+  vla_ee_bridge (xyz Jacobian IK, 23-D EE → 29-D q*), step2 (u=[q;q*]∈R^58,
+  N=1000, ρ=0.95, α=0.3, λ=1, 50-tick hold), and step3_dual_thread
+  (GIL-free shared q*, MuJoCo 29-DoF PD). Not hardware closed-loop.
+  """
+  readout = "#00695C"
+  fig, ax = plt.subplots(figsize=(7.42, 3.92))
+  ax.set_xlim(0.0, 14.55)
+  ax.set_ylim(0.02, 6.72)
   ax.axis("off")
   fig.patch.set_facecolor("white")
 
-  def box(x, y, w, h, title, sub, color):
+  def box(x, y, w, h, title, sub, color, title_fs=7.6, sub_fs=5.7, lw=1.45):
     ax.add_patch(
       FancyBboxPatch(
-        (x, y), w, h, boxstyle="round,pad=0.08",
-        linewidth=1.4, edgecolor=color, facecolor=color + "22",
+        (x, y), w, h, boxstyle="round,pad=0.05",
+        linewidth=lw, edgecolor=color, facecolor=color + "16",
+        mutation_aspect=0.3, zorder=2,
       )
     )
-    ax.text(x + w / 2, y + h * 0.62, title, ha="center", va="center",
-            fontsize=8.5, fontweight="bold", color=color)
-    ax.text(x + w / 2, y + h * 0.28, sub, ha="center", va="center",
-            fontsize=6.5, color="#444444")
+    ax.text(
+      x + w / 2, y + h * 0.70, title, ha="center", va="center",
+      fontsize=title_fs, fontweight="bold", color=color, clip_on=False, zorder=3,
+    )
+    ax.text(
+      x + w / 2, y + h * 0.32, sub, ha="center", va="center",
+      fontsize=sub_fs, color="#444444", linespacing=1.18, clip_on=False, zorder=3,
+    )
+    return (x, y, w, h)
 
-  def arrow(x1, y1, x2, y2, label="", color="#333333"):
+  def h_arrow(x1, x2, y, label="", color="#333333", label_side="above"):
     ax.annotate(
-      "", xy=(x2, y2), xytext=(x1, y1),
-      arrowprops=dict(arrowstyle="-|>", lw=1.5, color=color),
+      "", xy=(x2, y), xytext=(x1, y),
+      arrowprops=dict(
+        arrowstyle="-|>", lw=1.45, color=color,
+        mutation_scale=10, shrinkA=0, shrinkB=0,
+      ),
+      clip_on=False, zorder=4,
     )
     if label:
-      ax.text((x1 + x2) / 2, (y1 + y2) / 2 + 0.22, label,
-              ha="center", fontsize=6.5, color=color, style="italic")
+      dy = 0.20 if label_side == "above" else -0.26
+      ax.text(
+        (x1 + x2) / 2, y + dy, label, ha="center", va="center",
+        fontsize=6.0, color=color,
+        bbox=dict(facecolor="white", edgecolor="none", boxstyle="round,pad=0.10"),
+        clip_on=False, zorder=5,
+      )
 
-  box(0.15, 2.6, 2.0, 1.5, "RGB + lang", "G1 camera\ninstruction", "#1565C0")
-  box(0.15, 0.4, 2.0, 1.5, "Proprio q_t", "29-DoF joints\n@ 100 Hz", "#455A64")
-  box(2.6, 1.5, 2.4, 2.2, "UnifoLM-VLA", "Base · FP16\n~1.75 Hz / 571 ms", COLORS["vla"])
-  arrow(2.15, 3.3, 2.6, 3.0, "image")
-  arrow(2.15, 1.1, 2.6, 2.0, "text")
-  box(5.4, 1.7, 1.9, 1.8, "IK bridge", "EE chunk →\n29-D q*", "#6A1B9A")
-  arrow(5.0, 2.6, 5.4, 2.6, "~1.7 Hz")
-  box(7.7, 1.4, 2.5, 2.4, "ESN reservoir", "N=1000, ρ=0.95\nu=[q;q*]∈R⁵⁸\nridge W_out", COLORS["esn"])
-  arrow(7.3, 2.6, 7.7, 2.6, "held q*")
-  arrow(2.15, 0.9, 7.7, 1.8, "q_t", color="#455A64")
-  box(10.7, 1.6, 2.9, 2.0, "G1 commands", "29-DoF targets\n100 Hz (≤10 ms)", COLORS["req"])
-  arrow(10.2, 2.6, 10.7, 2.6, "100 Hz", color=COLORS["esn"])
+  def elbow_arrow(points, label="", color="#455A64", label_xy=None, lw=1.45):
+    xs, ys = zip(*points)
+    ax.plot(xs, ys, color=color, lw=lw, solid_capstyle="round", zorder=1)
+    ax.annotate(
+      "", xy=points[-1], xytext=points[-2],
+      arrowprops=dict(
+        arrowstyle="-|>", lw=lw, color=color,
+        mutation_scale=10, shrinkA=0, shrinkB=0,
+      ),
+      clip_on=False, zorder=2,
+    )
+    if label and label_xy is not None:
+      ax.text(
+        label_xy[0], label_xy[1], label, ha="center", va="center",
+        fontsize=6.0, color=color,
+        bbox=dict(facecolor="white", edgecolor="none", boxstyle="round,pad=0.10"),
+        clip_on=False, zorder=5,
+      )
+
+  # Lane bands
+  ax.add_patch(
+    FancyBboxPatch(
+      (3.42, 3.58), 10.95, 2.22, boxstyle="round,pad=0.02",
+      linewidth=0, facecolor="#FFEBEE", alpha=0.38, zorder=0,
+    )
+  )
+  ax.add_patch(
+    FancyBboxPatch(
+      (3.42, 0.48), 10.95, 2.82, boxstyle="round,pad=0.02",
+      linewidth=0, facecolor="#E8F5E9", alpha=0.42, zorder=0,
+    )
+  )
+  ax.text(
+    14.20, 5.58, r"Slow path  ($\sim$1.75 Hz)  ·  Process A",
+    fontsize=6.6, color=COLORS["vla"], fontweight="bold", ha="right", va="center",
+  )
+  ax.text(
+    14.20, 3.12, "Fast path  (100 Hz)  ·  Process B",
+    fontsize=6.6, color=COLORS["esn"], fontweight="bold", ha="right", va="center",
+  )
+
+  # Observations
+  ax.add_patch(
+    FancyBboxPatch(
+      (0.12, 0.48), 3.16, 5.32, boxstyle="round,pad=0.04",
+      linewidth=1.05, edgecolor="#90A4AE", facecolor="#ECEFF1",
+      linestyle="--", zorder=0,
+    )
+  )
+  ax.text(1.70, 5.58, "Observations", ha="center", fontsize=7.1,
+          color="#37474F", fontweight="bold")
+
+  cam = box(0.30, 4.22, 2.80, 1.10, "RGB", "MuJoCo G1 camera", "#1565C0", 7.5, 5.6)
+  lang = box(0.30, 2.90, 2.80, 1.10, "Language", "wipe / clean instruction", "#0277BD", 7.5, 5.6)
+  state = box(
+    0.30, 0.64, 2.80, 2.02, "Robot state",
+    "23-D EE proprio → VLA\n29-DoF  $q_t$  → ESN",
+    "#455A64", 7.5, 5.6,
+  )
+
+  vla = box(
+    4.55, 3.72, 3.05, 1.78, "UnifoLM-VLA-Base",
+    "frozen  ·  FP16\n" + r"$\sim$1.75 Hz  /  571 ms",
+    COLORS["vla"], 7.5, 5.7,
+  )
+  ik = box(
+    8.50, 3.72, 2.55, 1.78, "Jacobian IK",
+    r"23-D EE $\rightarrow$ 29-D $q^{\star}$" + "\nxyz  ·  legs held",
+    "#6A1B9A", 7.5, 5.7,
+  )
+
+  ax.add_patch(
+    FancyBboxPatch(
+      (4.42, 0.58), 6.38, 2.28, boxstyle="round,pad=0.03",
+      linewidth=1.05, edgecolor=COLORS["esn"], facecolor="none",
+      linestyle="--", zorder=1,
+    )
+  )
+  ax.text(
+    7.61, 2.94, r"ESN bridge   $u=[q_t;\,q^{\star}]\in\mathbb{R}^{58}$",
+    ha="center", va="center", fontsize=6.2, color=COLORS["esn"], fontweight="bold",
+    zorder=3,
+  )
+  esn = box(
+    4.55, 0.70, 3.05, 1.78, "ESN reservoir",
+    r"fixed  $W_{\mathrm{res}},W_{\mathrm{in}}$" + "\n" + r"$N{=}1000$, $\rho{=}0.95$, $\alpha{=}0.3$",
+    COLORS["esn"], 7.5, 5.6,
+  )
+  wout = box(
+    8.50, 0.70, 2.55, 1.78, r"Ridge $W_{\mathrm{out}}$",
+    "trained (only)" + "\n" + r"$y=W_{\mathrm{out}}[x;u]$",
+    readout, 7.5, 5.6, lw=1.7,
+  )
+  g1 = box(
+    11.55, 0.70, 2.65, 1.78, "MuJoCo G1",
+    "29-DoF PD targets\n100 Hz  (≤10 ms)",
+    COLORS["req"], 7.5, 5.6,
+  )
+
+  # Obs → VLA
+  h_arrow(cam[0] + cam[2], vla[0], 4.78, "image", "#1565C0", "above")
+  elbow_arrow(
+    [
+      (lang[0] + lang[2], lang[1] + lang[3] / 2),
+      (4.12, lang[1] + lang[3] / 2),
+      (4.12, 4.28),
+      (vla[0], 4.28),
+    ],
+    label="text",
+    color="#0277BD",
+    label_xy=(3.72, 3.72),
+  )
+  elbow_arrow(
+    [
+      (state[0] + state[2], state[1] + state[3] * 0.72),
+      (4.12, state[1] + state[3] * 0.72),
+      (4.12, 3.95),
+      (vla[0], 3.95),
+    ],
+    label="23-D EE",
+    color="#455A64",
+    label_xy=(3.68, 2.28),
+  )
+
+  # VLA → IK
+  h_arrow(vla[0] + vla[2], ik[0], 4.61, "", COLORS["vla"])
+  ax.text(
+    (vla[0] + vla[2] + ik[0]) / 2, 5.28, "23-D EE chunk",
+    ha="center", va="center", fontsize=6.0, color=COLORS["vla"],
+    bbox=dict(facecolor="#FFEBEE", edgecolor="none", boxstyle="round,pad=0.12"),
+    clip_on=False, zorder=5,
+  )
+
+  # IK → ESN (latched shared register; 50 ticks at the 2 Hz training hold)
+  elbow_arrow(
+    [
+      (ik[0], ik[1]),
+      (ik[0], 3.22),
+      (esn[0] + esn[2] * 0.50, 3.22),
+      (esn[0] + esn[2] * 0.50, esn[1] + esn[3]),
+    ],
+    label=r"held $q^{\star}$  (50 ticks, shared)",
+    color="#6A1B9A",
+    label_xy=(7.55, 3.40),
+  )
+
+  # Fast proprio → reservoir
+  h_arrow(
+    state[0] + state[2], esn[0], esn[1] + esn[3] * 0.38,
+    r"$q_t$  @ 100 Hz", "#455A64", "above",
+  )
+
+  # Reservoir → readout → MuJoCo
+  h_arrow(esn[0] + esn[2], wout[0], wout[1] + wout[3] * 0.55, r"$x$", COLORS["esn"], "above")
+  h_arrow(
+    wout[0] + wout[2], g1[0], g1[1] + g1[3] * 0.55,
+    r"$\hat{y}\in\mathbb{R}^{29}$  @ 100 Hz", readout, "above",
+  )
+
+  # Closed-loop proprio from MuJoCo back to q_t
+  elbow_arrow(
+    [
+      (g1[0] + g1[2] / 2, g1[1]),
+      (g1[0] + g1[2] / 2, 0.28),
+      (state[0] + state[2] / 2, 0.28),
+      (state[0] + state[2] / 2, state[1]),
+    ],
+    label=r"closed loop  $q_t$  (sim)",
+    color=COLORS["req"],
+    label_xy=(8.55, 0.14),
+  )
 
   ax.text(
-    7.0, 4.55,
-    "Frequency gap: UnifoLM ~1.75 Hz  →  ESN bridge  →  G1 100 Hz  (~57×)",
-    ha="center", fontsize=8, color=COLORS["vla"],
-    bbox=dict(facecolor="#FFEBEE", edgecolor=COLORS["vla"], boxstyle="round,pad=0.25"),
+    8.90, 6.38,
+    r"Frequency gap: UnifoLM $\sim$1.75 Hz  $\rightarrow$  ESN bridge  $\rightarrow$  100 Hz  ($\sim$57$\times$)",
+    ha="center", fontsize=7.6, color=COLORS["vla"],
+    bbox=dict(facecolor="#FFEBEE", edgecolor=COLORS["vla"], boxstyle="round,pad=0.26"),
   )
-  ax.set_title("VLA + ESN hybrid control for Unitree G1 (29-DoF)", fontweight="bold", pad=6)
+  ax.set_title(
+    "VLA + ESN hybrid control for Unitree G1 (29-DoF, MuJoCo)",
+    fontweight="bold", pad=7, fontsize=10,
+  )
   return _save(fig, "fig1_architecture")
 
 
@@ -502,28 +692,43 @@ def main() -> None:
     action="store_true",
     help="Rejected: figures must come from measured results (exit nonzero)",
   )
+  parser.add_argument(
+    "--only",
+    nargs="+",
+    metavar="STEM",
+    help="Generate only these stems (e.g. fig1_architecture)",
+  )
   args = parser.parse_args()
   if args.mock:
     raise SystemExit(
       "Refusing --mock: ICRA figures must be regenerated from measured results/ artifacts."
     )
 
+  generators = {
+    "fig1_architecture": fig1_architecture,
+    "fig2_latency_gap": fig2_latency_gap,
+    "fig3_dataset_distribution": fig3_dataset_distribution,
+    "fig4_offline_baselines": fig4_offline_baselines,
+    "fig5_hyperparam_sweep": fig5_hyperparam_sweep,
+    "fig6_contact_ladder": fig6_contact_ladder,
+    "fig7_control_rates": fig7_control_rates,
+    "fig8_oracle_heldout": fig8_oracle_heldout,
+  }
+
   logger.info("Generating measured paper figures → %s", FIGURES_DIR)
-  paths = [
-    fig1_architecture(),
-    fig2_latency_gap(),
-    fig3_dataset_distribution(),
-    fig4_offline_baselines(),
-    fig5_hyperparam_sweep(),
-    fig6_contact_ladder(),
-    fig7_control_rates(),
-    fig8_oracle_heldout(),
-  ]
+  if args.only:
+    missing = [s for s in args.only if s not in generators]
+    if missing:
+      raise SystemExit(f"Unknown figure stem(s): {missing}")
+    paths = [generators[s]() for s in args.only]
+  else:
+    paths = [fn() for fn in generators.values()]
   write_manifest(paths)
   print("\nGenerated:")
   for p in paths:
     print(f"  {p}")
   print(f"Paper sync: {PAPER_FIG_DIR}")
+  print(f"WRL sync:   {WRL_FIG_DIR}")
 
 
 if __name__ == "__main__":

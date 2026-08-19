@@ -1,0 +1,48 @@
+{
+  "present_robot": {
+    "hands": "5-finger (not Dex1)",
+    "start_pose": "arms_hanging_down",
+    "workspace": "white_table_dark_cloth_black_ring_dirt",
+    "camera": "head_downward_rgb_depth_port_5555"
+  },
+  "demo_init": {
+    "source": "preset:arms_ready",
+    "sim_reference": "results/step4_mujoco_evaluation/table_wipe_ep160_oracle_esn.mp4 (arms already up)",
+    "q_goal_29d": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.55,
+      0.25,
+      -0.15,
+      0.9,
+      0.0,
+      0.2,
+      0.0,
+      0.45,
+      -0.2,
+      0.1,
+      0.7,
+      0.0,
+      0.15,
+      0.0
+    ],
+    "legs_waist_frozen": true,
+    "fingers_not_commanded": true
+  },
+  "instruction": "Go to that table and wipe the dirt off the table using the cloth on the table.",
+  "e_stop": "Remote L1+A (damping). Tether on. Ctrl+C scripts.",
+  "today_success": "slow arm motion toward init + verified e-stop"
+}

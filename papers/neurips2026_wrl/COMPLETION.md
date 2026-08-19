@@ -108,14 +108,19 @@ Use this if you need to cut scope before **26 Aug**. Check boxes as you go.
 |---|---|---|---|
 | Quantify jerk / EE RMSE in one extra table row | Low | Strengthens ESN vs ZOH when task success ties | **Done** (2026-08-13) |
 | Fill multi-task ESN CSV for 2–3 extra UnifoLM tasks | Medium | Shows bridge is not wipe-only | **Done** (zero-GPU; wipe/clean/stack) |
-| Longer live wipe ($>$30 s) or $n{>}1$ seeds | Low–Med | Stronger live claim | **Defer** — do not spend GPU next |
-| S2R smoke test on Jetson (even 10 s) | High | Real deploy | Defer unless already wired |
+| Longer live wipe ($>$30 s) or $n{>}1$ seeds | Low–Med | Stronger live claim | **Done** (n=3 matched clamps; corrects ~14× artifact) |
 
-**Done: jerk + live joint-RMSE boost**
-- Provenance: `research/results/step3_evaluation/jerk_joint_rmse_boost_summary.json`
-- Paper Table 2 (offline): RMSE + jerk ratio — ZOH $50\times$, ESN $1.44\times$ vs linear
-- Live wipe (tied 100% contact/task under `press_table`): ESN joint RMSE **0.514** vs ZOH **7.17** rad ($\sim$14$\times$)
-- Do **not** claim EE RMSE — `right_ee_rmse_m` is identical (0.096) across methods in current logs
+**Done: jerk + offline RMSE (still valid)**
+- Provenance: `research/results/step3_evaluation/jerk_joint_rmse_boost_summary.json` (offline rows only)
+- Paper Table 2: RMSE + jerk ratio — ZOH $50\times$, ESN $1.44\times$ vs linear; ESN ~5.6× better RMSE than linear
+- Do **not** claim EE RMSE
+
+**Corrected: live n=3 matched clamps (2026-08-13)**
+- Provenance: `research/results/step3_evaluation/live_n3_matched_clamps_summary.json`
+- ESN **0.521 ± 0.005** vs ZOH **0.532 ± 0.008** rad (~1.02×) — **tied**, not ~14×
+- Old 0.514 vs 7.17 was mismatched clamps on ZOH — **removed from PDF**
+- Paper claim: tied live success under disclosed priors; ESN wins **offline** tracking/jerk + rate bridging
+| S2R smoke test on Jetson (even 10 s) | High | Real deploy | Defer unless already wired |
 
 **Done: multi-task open-loop table (zero-GPU)**
 - Provenance: `research/results/step3_evaluation/multitask_esn_table_summary.json`

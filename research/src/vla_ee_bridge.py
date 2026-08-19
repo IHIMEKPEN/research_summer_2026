@@ -11,7 +11,6 @@ into joint-space targets and builds the 23D proprio vector VLA expects.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -19,6 +18,7 @@ import numpy as np
 
 import mujoco
 
+from src.g1_dex1 import g1_mjcf_candidates, is_full_dex_path, materialize_g1_dex1_mjcf
 from src.step1_profile_unifolm_vla0 import G1_DOF
 from src.step2_esn_cuda_ridge import extract_joint_state_29d
 
@@ -31,6 +31,8 @@ LEG_SLICE = slice(0, 12)
 
 LEFT_HAND_BODY = "left_wrist_yaw_link"
 RIGHT_HAND_BODY = "right_wrist_yaw_link"
+
+_DEX1_BIND_CACHE: dict[int, object] = {}
 
 # Live UnifoLM EE xyz can leave the wipe workspace; clamp before IK.
 WIPE_EE_XYZ_LO = np.array([0.05, -0.60, 0.72], dtype=np.float64)
@@ -68,8 +70,9 @@ def rotmat_to_rot6d(rot: np.ndarray) -> np.ndarray:
 
 
 def build_wipe_table_model(robot_mjcf: Path) -> mujoco.MjModel:
-    """Compile G1 + wipe table (static cloth geom) aligned with ``mujoco_wipe_scene``."""
+    """Compile G1 + Dex1-1 + wipe table (static cloth geom) aligned with ``mujoco_wipe_scene``."""
     # Keep IK / Step-3 static scene consistent with interactive Step-4 geometry.
+    from src.g1_dex1 import hide_non_dex1_hand_geoms
     from src.mujoco_wipe_scene import (
         CLOTH_HALF_EXTENTS,
         CLOTH_TABLE_POS,
@@ -77,7 +80,7 @@ def build_wipe_table_model(robot_mjcf: Path) -> mujoco.MjModel:
         TABLE_TOP_HALF_EXTENTS,
     )
 
-    robot_mjcf = robot_mjcf.resolve()
+    robot_mjcf = materialize_g1_dex1_mjcf(robot_mjcf.resolve())
     hx, hy, hz = CLOTH_HALF_EXTENTS
     tx, ty, tz = TABLE_BODY_POS
     thx, thy, thz = TABLE_TOP_HALF_EXTENTS
@@ -110,26 +113,35 @@ def build_wipe_table_model(robot_mjcf: Path) -> mujoco.MjModel:
         )
         scene_path.write_text(scene_xml, encoding="utf-8")
     try:
-        return mujoco.MjModel.from_xml_path(str(scene_path))
+        model = mujoco.MjModel.from_xml_path(str(scene_path))
+        hide_non_dex1_hand_geoms(model)
+        return model
     finally:
         scene_path.unlink(missing_ok=True)
+        if robot_mjcf.name.startswith("_g1_dex1_runtime"):
+            robot_mjcf.unlink(missing_ok=True)
 
 
 def resolve_robot_mjcf(user_path: Optional[str] = None) -> Path:
-    """Resolve the base G1 robot MJCF (without scene furniture)."""
+    """Resolve the base G1 robot MJCF (29-DoF body or official Dex1-1)."""
     if user_path:
         path = Path(user_path).expanduser().resolve()
-        if path.is_file():
-            return path
-        raise FileNotFoundError(f"MJCF not found: {path}")
-    for candidate in (
-        Path(os.environ.get("G1_MJCF", "")),
-        Path.home() / "unitree_mujoco" / "unitree_robots" / "g1" / "g1_29dof.xml",
-        Path("/home/aihimekpen/research/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.xml"),
-    ):
-        if str(candidate) and candidate.is_file():
+        if not path.is_file():
+            raise FileNotFoundError(f"MJCF not found: {path}")
+        if is_full_dex_path(path):
+            raise ValueError(
+                f"Refusing full-dex MJCF {path.name}. Wipe UnifoLM / "
+                "G1_Dex1_Wipe_Table use Dex1-1. Set G1_MJCF to "
+                "g1_29dof_mode_15_with_dex1_1 or a 29-DoF body XML."
+            )
+        return path
+    for candidate in g1_mjcf_candidates():
+        if str(candidate) and candidate.is_file() and not is_full_dex_path(candidate):
             return candidate.resolve()
-    raise FileNotFoundError("G1 robot MJCF not found.")
+    raise FileNotFoundError(
+        "G1 robot MJCF not found. Install unitree_ros g1_description "
+        "(prefer g1_29dof_mode_15_with_dex1_1) or set G1_MJCF."
+    )
 
 
 def load_wipe_table_init_joints(
@@ -163,14 +175,24 @@ def _joint_dof_indices(model: mujoco.MjModel, joint_names: Sequence[str]) -> np.
     return np.asarray(dofs, dtype=np.int32)
 
 
+def _body_joint_binding(model: mujoco.MjModel):
+    from src.g1_dex1 import Dex1Binding
+
+    key = id(model)
+    bind = _DEX1_BIND_CACHE.get(key)
+    if bind is None:
+        bind = Dex1Binding.from_model(model, body_dof=G1_DOF)
+        _DEX1_BIND_CACHE[key] = bind
+    return bind
+
+
 def set_joint_positions_in_data(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     joints_29d: np.ndarray,
 ) -> None:
-    data.qpos[QPOS_ACTUATED_START : QPOS_ACTUATED_START + G1_DOF] = np.asarray(
-        joints_29d, dtype=np.float64
-    ).reshape(-1)
+    bind = _body_joint_binding(model)
+    data.qpos[bind.body_qpos_adr] = np.asarray(joints_29d, dtype=np.float64).reshape(-1)
     mujoco.mj_forward(model, data)
 
 
@@ -251,6 +273,9 @@ def clip_joints_to_model_limits(
     actuated_i = 0
     for j in range(model.njnt):
         if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
+            continue
+        jname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, j) or ""
+        if "dex1" in jname.lower():
             continue
         if actuated_i >= G1_DOF:
             break

@@ -47,6 +47,13 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 
 import mujoco
 
+from src.g1_dex1 import (
+    Dex1Binding,
+    GRIPPER_OPEN_TYPICAL,
+    g1_mjcf_candidates,
+    hide_non_dex1_hand_geoms,
+    materialize_g1_dex1_mjcf,
+)
 from src.paths import models_path, results_path
 from src.step1_profile_unifolm_vla0 import G1_DOF, TARGET_HZ, UnifoLMVLAWrapper
 from src.step2_esn_cuda_ridge import (
@@ -72,11 +79,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = results_path("step3_dual_thread")
-DEFAULT_MJCF_CANDIDATES = (
-    Path(os.environ.get("G1_MJCF", "")),
-    Path.home() / "unitree_mujoco" / "unitree_robots" / "g1" / "g1_29dof.xml",
-    Path("/home/aihimekpen/research/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.xml"),
-)
+DEFAULT_MJCF_CANDIDATES = g1_mjcf_candidates()
 DEFAULT_INSTRUCTION = "Wipe the table with the cloth."
 DEFAULT_VLA_HZ = 2.0
 DEFAULT_UNNORM_KEY = "g1_wipe_table"
@@ -224,6 +227,7 @@ class G1MuJoCoEnv:
     renderer: mujoco.Renderer = field(init=False, repr=False)
     video_renderer: Optional[mujoco.Renderer] = field(init=False, repr=False, default=None)
     camera: mujoco.MjvCamera = field(init=False, repr=False)
+    dex1: Dex1Binding = field(init=False, repr=False)
     _initial_qpos: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -233,10 +237,20 @@ class G1MuJoCoEnv:
         else:
             if not self.mjcf_path.is_file():
                 raise FileNotFoundError(f"MJCF not found: {self.mjcf_path}")
-            self.model = mujoco.MjModel.from_xml_path(str(self.mjcf_path))
+            dex1_path = materialize_g1_dex1_mjcf(self.mjcf_path)
+            try:
+                self.model = mujoco.MjModel.from_xml_path(str(dex1_path))
+            finally:
+                if dex1_path.name.startswith("_g1_dex1_runtime"):
+                    dex1_path.unlink(missing_ok=True)
         self.data = mujoco.MjData(self.model)
-        if self.model.nu != G1_DOF:
-            raise ValueError(f"Expected {G1_DOF} actuators, got {self.model.nu}")
+        hide_non_dex1_hand_geoms(self.model)
+        self.dex1 = Dex1Binding.from_model(self.model, body_dof=G1_DOF)
+        if not self.dex1.present:
+            raise ValueError(
+                "G1 MJCF has no Dex1-1 finger joints. Wipe UnifoLM / "
+                "G1_Dex1_Wipe_Table require Dex1-1 (not Inspire / Dex3)."
+            )
 
         h, w = self.image_size
         self.renderer = mujoco.Renderer(self.model, height=h, width=w)
@@ -262,7 +276,7 @@ class G1MuJoCoEnv:
         mujoco.mj_resetData(self.model, self.data)
         q = self.data.qpos.copy()
         if self.init_joints_29d is not None:
-            q[QPOS_ACTUATED_START : QPOS_ACTUATED_START + G1_DOF] = np.asarray(
+            q[self.dex1.body_qpos_adr] = np.asarray(
                 self.init_joints_29d, dtype=np.float64
             ).reshape(-1)
         elif self.model.nq >= QPOS_ACTUATED_START + G1_DOF:
@@ -271,6 +285,9 @@ class G1MuJoCoEnv:
             q[QPOS_ACTUATED_START + 0] = -0.15
             q[QPOS_ACTUATED_START + 6] = -0.15
         self.data.qpos[:] = q
+        self.dex1.set_gripper_qpos(
+            self.data, GRIPPER_OPEN_TYPICAL, GRIPPER_OPEN_TYPICAL, zero_vel=True
+        )
         self._initial_qpos = self.data.qpos.copy()
         mujoco.mj_forward(self.model, self.data)
 
@@ -280,7 +297,7 @@ class G1MuJoCoEnv:
         )
 
     def get_joint_positions(self) -> np.ndarray:
-        return self.data.qpos[QPOS_ACTUATED_START : QPOS_ACTUATED_START + G1_DOF].copy()
+        return np.asarray(self.data.qpos[self.dex1.body_qpos_adr], dtype=np.float64).copy()
 
     def render_rgb(self) -> np.ndarray:
         self.renderer.update_scene(self.data, camera=self.camera)
@@ -292,33 +309,70 @@ class G1MuJoCoEnv:
         self.video_renderer.update_scene(self.data, camera=self.camera)
         return self.video_renderer.render().copy()
 
-    def apply_unified_control(self, ctrl_29d: np.ndarray) -> None:
-        """PD tracking: ESN readout is a desired 29-DoF joint configuration."""
+    def apply_unified_control(
+        self,
+        ctrl_29d: np.ndarray,
+        left_gripper: Optional[float] = None,
+        right_gripper: Optional[float] = None,
+    ) -> None:
+        """PD tracking: ESN readout is a desired 29-DoF joint configuration.
+
+        Dex1-1 fingers are driven separately from dataset / synthetic gripper
+        scalars so contact uses the same 2-finger EE as UnifoLM training.
+        """
         q_des = np.asarray(ctrl_29d, dtype=np.float64).reshape(-1)
-        if q_des.size != self.model.nu:
-            raise ValueError(f"ctrl must be {self.model.nu}-D, got {q_des.size}")
-        q = self.data.qpos[QPOS_ACTUATED_START : QPOS_ACTUATED_START + G1_DOF]
-        qd = self.data.qvel[6 : 6 + G1_DOF]
-        tau = self.pd_kp * (q_des - q) - self.pd_kd * qd
-        for i in range(self.model.nu):
-            jid = self.model.actuator_trnid[i, 0]
+        if q_des.size != G1_DOF:
+            raise ValueError(f"ctrl must be {G1_DOF}-D, got {q_des.size}")
+        q = np.asarray(self.data.qpos[self.dex1.body_qpos_adr], dtype=np.float64)
+        qd = np.asarray(self.data.qvel[self.dex1.body_dof_adr], dtype=np.float64)
+        tau_body = self.pd_kp * (q_des - q) - self.pd_kd * qd
+        tau = np.zeros(int(self.model.nu), dtype=np.float64)
+        for i, act_id in enumerate(self.dex1.body_actuator_ids):
+            jid = int(self.model.actuator_trnid[int(act_id), 0])
+            val = tau_body[i]
             if self.model.jnt_actfrclimited[jid]:
                 lo, hi = self.model.jnt_actfrcrange[jid]
-                tau[i] = np.clip(tau[i], lo, hi)
+                val = float(np.clip(val, lo, hi))
+            tau[int(act_id)] = val
+        if self.dex1.present:
+            kp_g, kd_g = 400.0, 8.0
+            for side, width in (("left", left_gripper), ("right", right_gripper)):
+                if width is None:
+                    continue
+                slide = dex1_width_to_slide(width)
+                for act_id, qadr, dadr in zip(
+                    self.dex1.finger_actuator_ids[side],
+                    self.dex1.finger_qpos_adr[side],
+                    self.dex1.finger_dof_adr[side],
+                ):
+                    tau[int(act_id)] = kp_g * (slide - float(self.data.qpos[qadr])) - kd_g * float(
+                        self.data.qvel[dadr]
+                    )
         self.data.ctrl[:] = tau
 
-    def set_actuated_joints(self, joints_29d: np.ndarray) -> None:
+    def set_actuated_joints(
+        self,
+        joints_29d: np.ndarray,
+        left_gripper: Optional[float] = None,
+        right_gripper: Optional[float] = None,
+    ) -> None:
         """Kinematic set of actuated joints (matches Step 2 open-loop replay)."""
         q = np.asarray(joints_29d, dtype=np.float64).reshape(-1)
         if q.size != G1_DOF:
             raise ValueError(f"Expected {G1_DOF} joints, got {q.size}")
-        self.data.qpos[QPOS_ACTUATED_START : QPOS_ACTUATED_START + G1_DOF] = q
-        self.data.qvel[6 : 6 + G1_DOF] = 0.0
+        self.data.qpos[self.dex1.body_qpos_adr] = q
+        self.data.qvel[self.dex1.body_dof_adr] = 0.0
+        self.dex1.set_gripper_qpos(self.data, left_gripper, right_gripper, zero_vel=True)
         mujoco.mj_forward(self.model, self.data)
 
-    def step_kinematic(self, joints_29d: np.ndarray) -> None:
+    def step_kinematic(
+        self,
+        joints_29d: np.ndarray,
+        left_gripper: Optional[float] = None,
+        right_gripper: Optional[float] = None,
+    ) -> None:
         """Advance one tick by directly applying joint targets (no PD torque)."""
-        self.set_actuated_joints(joints_29d)
+        self.set_actuated_joints(joints_29d, left_gripper=left_gripper, right_gripper=right_gripper)
         self.data.qpos[:QPOS_ACTUATED_START] = self._initial_qpos[:QPOS_ACTUATED_START]
         self.data.qvel[:6] = 0.0
 

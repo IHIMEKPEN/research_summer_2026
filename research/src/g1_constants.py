@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
-# Controllable actuated joints (Dex1 wipe / g1_29dof MJCF).
+# Controllable actuated joints (Dex1 wipe / 29-DoF body; Dex1-1 fingers are separate).
 G1_DOF = 29
 CONTROL_HZ = 100.0
 VLA_HZ = 2.0

@@ -181,17 +181,17 @@ We combine a frozen reservoir with a language-conditioned VLA rather than replac
 
 \section{Methodology}
 \subsection{System Architecture}
-Figure~\ref{fig:architecture} summarizes the hybrid stack: UnifoLM emits sparse EE intents, an IK bridge lifts them to 29-D joint targets, and a fixed ESN reservoir with ridge readout produces 100\,Hz commands conditioned on proprioception.
+Figure~\ref{fig:architecture} summarizes the hybrid stack: frozen UnifoLM emits sparse 23-D EE intents, a Jacobian IK bridge lifts them to 29-D joint targets and holds $q^{\star}$ for 50 ticks, and a fixed ESN reservoir with a ridge-trained readout produces 100\,Hz MuJoCo PD commands conditioned on proprioception.
 
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{figures/fig1_architecture.pdf}
-\caption{VLA$+$ESN architecture for Unitree G1 (29\,DoF). UnifoLM-VLA-Base runs at $\sim$1.75\,Hz on a DGX V100; the ESN bridge closes the $\sim$57$\times$ gap to the 100\,Hz joint loop.}
+\caption{Two-rate VLA$+$ESN stack on simulated G1 (29\,DoF). Frozen UnifoLM-VLA-Base ($\sim$1.75\,Hz, V100) emits 23-D EE chunks; Jacobian IK holds $q^{\star}$ for 50 ticks. Only $W_{\mathrm{out}}$ is trained. Process~B closes the $\sim$57$\times$ gap with 100\,Hz MuJoCo PD.}
 \label{fig:architecture}
 \end{figure*}
 
 \begin{itemize}
-  \item \textbf{Perception / VLA:} \texttt{UnifoLM-VLA-Base} (backbone \texttt{UnifoLM-VLM-Base}) emits \textbf{23-D end-effector} action chunks for G1 wipe/clean tasks (\texttt{g1\_wipe\_table}, \texttt{g1\_clean\_table}, \ldots); a Jacobian \textbf{IK bridge} maps EE poses to 29-D joint targets for the ESN.
+  \item \textbf{Perception / VLA:} Frozen \texttt{UnifoLM-VLA-Base} (backbone \texttt{UnifoLM-VLM-Base}) emits \textbf{23-D end-effector} action chunks for G1 wipe/clean tasks (\texttt{g1\_wipe\_table}, \texttt{g1\_clean\_table}, \ldots); a Jacobian \textbf{IK bridge} maps EE \emph{xyz} to 29-D $q^{\star}$ (legs held) and latches the target for 50 ticks.
   \item \textbf{ESN bridge:} Leaky reservoir update
   \[
   x(t)=(1-\alpha)x(t-1)+\alpha\,\tanh\!\big(W_{\mathrm{res}}x(t-1)+W_{\mathrm{in}}u(t)\big),
@@ -424,6 +424,12 @@ The MuJoCo wipe \emph{oracle} on all 40 held-out episodes (Fig.~\ref{fig:oracle}
 Matching \emph{live} UnifoLM wipe trials (30\,s, interactive cloth) attach under a proximity-synthetic grasp; without a table-plane press prior the VLA lifts the cloth and contact collapses ($\sim$5\%).
 Enabling \texttt{press\_table} (held cloth follows hand XY on the table surface) restores \textbf{100\%} contact and task success for ESN and ZOH (Fig.~\ref{fig:contact})---a geometric wipe prior, not learned press-from-vision.
 Orientation IK currently tracks EE position only; UnifoLM EE actions also lack an explicit Dex1 gripper channel.
+
+\paragraph{Onboard sensing FOV.}
+Real G1 head-camera streams (RGB$+$depth, $\sim$10\,Hz ZMQ) confirm a strongly downward ego view: near-field floor and workspace fill the frame, with little straight-ahead horizon.
+Table wipe is compatible with that mount, but vision-conditioned UnifoLM updates inherit a second handicap beyond the frequency gap: observations are both temporally stale when inference finishes and spatially biased toward the ground plane (weak cues for torso-height obstacles, table extent, or operator proximity).
+The ESN closes a fast joint loop on held $q^{\star}$; it does not enlarge FOV or refresh pixels.
+Hardware S2R should therefore verify camera pitch against the demo distribution and consider wrist / multi-view sensing before attributing failures solely to the bridge.
 
 \section{Conclusion}
 We presented a VLA$+$ESN architecture targeting the \textbf{$\sim$57$\times$} gap between measured UnifoLM-VLA-Base inference (571\,ms / 1.752\,Hz PyTorch; 594\,ms / 1.684\,Hz Nsight) and G1 100\,Hz control.

@@ -1,0 +1,8 @@
+{
+  "cmds": 300,
+  "goal_src": "preset:arms_ready",
+  "cmd_addr": "tcp://*:5557",
+  "hardware_motion": false,
+  "log": "/Users/andrew/Downloads/research/robotics/research/results/arm_goto_init/latest.jsonl",
+  "goal_card": "/Users/andrew/Downloads/research/robotics/research/results/arm_goto_init/demo_init_goal.json"
+}

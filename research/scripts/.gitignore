@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pt
+g1_frames/
+snapshot_*.jpg

@@ -127,11 +127,18 @@ class G1WipeTableEvalEnv(G1MuJoCoEnv):
     def __post_init__(self) -> None:
         import mujoco
 
+        from src.g1_dex1 import Dex1Binding, hide_non_dex1_hand_geoms
+
         robot_path = self.mjcf_path if self.mjcf_path.is_file() else None
         self.model = make_wipe_scene_env_model(robot_path, interactive_cloth=True)
         self.data = mujoco.MjData(self.model)
-        if self.model.nu != G1_DOF:
-            raise ValueError(f"Expected {G1_DOF} actuators, got {self.model.nu}")
+        hide_non_dex1_hand_geoms(self.model)
+        self.dex1 = Dex1Binding.from_model(self.model, body_dof=G1_DOF)
+        if not self.dex1.present:
+            raise ValueError(
+                "G1 MJCF has no Dex1-1 finger joints. Wipe UnifoLM / "
+                "G1_Dex1_Wipe_Table require Dex1-1 (not Inspire / Dex3)."
+            )
 
         h, w = self.image_size
         self.renderer = mujoco.Renderer(self.model, height=h, width=w)
@@ -269,7 +276,11 @@ class MuJoCoWipeEvaluator:
             for t_probe in range(traj_steps):
                 if float(right_gripper[t_probe]) >= GRIPPER_GRASP_THRESHOLD:
                     continue
-                env.set_actuated_joints(ground_truth[t_probe])
+                env.set_actuated_joints(
+                    ground_truth[t_probe],
+                    left_gripper=float(left_gripper[t_probe]),
+                    right_gripper=float(right_gripper[t_probe]),
+                )
                 attach_xyz, _ = env.cloth._hand_target_pose()
                 wipe_z.append(float(attach_xyz[2]))
                 if rest_pose is None:
@@ -353,9 +364,17 @@ class MuJoCoWipeEvaluator:
             cmd_np = esn.step_proprio(joint_gpu).detach().cpu().numpy()
 
             if cfg.control_mode == "kinematic":
-                env.step_kinematic(cmd_np)
+                env.step_kinematic(
+                    cmd_np,
+                    left_gripper=None if left_gripper is None else float(left_gripper[t]),
+                    right_gripper=None if right_gripper is None else float(right_gripper[t]),
+                )
             else:
-                env.apply_unified_control(cmd_np)
+                env.apply_unified_control(
+                    cmd_np,
+                    left_gripper=None if left_gripper is None else float(left_gripper[t]),
+                    right_gripper=None if right_gripper is None else float(right_gripper[t]),
+                )
                 env.step_physics()
 
             if cfg.enable_wipe_cloth and right_gripper is not None and left_gripper is not None:
