@@ -1,7 +1,6 @@
 # OS / editor
 .DS_Store
 .idea/
-.vscode/
 .claude/
 *.swp
 
@@ -100,3 +99,5 @@ others/__pycache__/
 
 # Separate repo (sibling under ~); do not nest here
 hardware_security/
+config.bat
+node_modules
