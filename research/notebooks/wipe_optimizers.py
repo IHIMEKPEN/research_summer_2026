@@ -28,21 +28,23 @@ class ArmReadoutAdapter:
 
 def _objective(esn, adapter, theta, ep, mjcf, teacher_targets=None):
     adapter.apply(esn, theta)
-    # Without a validated real cache, optimizer comparison is task-only.
     weight = 1.0 if teacher_targets is not None else 0.0
     try:
         result = rollout(esn, ep, mjcf, teacher_joint_targets=teacher_targets, teacher_weight=weight)
     except Exception as exc:
         return {
-            "L_task": 1e6, "L_teacher": 1e6, "L_total": 1e6,
+            "L_task": 1.0, "L_teacher": 1.0 if weight else 0.0, "L_total": 1.0,
+            "L_grasp": 1.0, "L_path": 1.0, "L_contact": 1.0, "L_coverage": 1.0,
+            "L_smooth": 1.0, "L_limits": 1.0, "L_jump": 1.0,
             "teacher_weight": weight, "teacher_source": "error",
             "anchors": 0, "grasp_success": False, "task_success": False,
             "wipe_path_length_m": 0.0, "table_contact_ratio": 0.0,
             "wipe_coverage_m2": 0.0, "max_cloth_jump_m": 1.0,
-            "joint_limit_violation": True, "error": str(exc),
+            "joint_limit_violation": True, "terminated_unstable": True,
+            "error": str(exc),
         }
     if not np.isfinite(result["L_total"]):
-        result = {**result, "L_task": 1e6, "L_teacher": 1e6, "L_total": 1e6, "task_success": False}
+        result = {**result, "L_task": 1.0, "L_teacher": 1.0 if weight else 0.0, "L_total": 1.0, "task_success": False}
     return result
 
 

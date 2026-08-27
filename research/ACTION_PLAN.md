@@ -132,6 +132,20 @@ Key artifacts:
 
 ## 3. Forward tasks (priority order)
 
+### Track P0† — Benchmark stabilization & hierarchical contact (blocking independent-ESN retrain)
+
+**Status (2026-08-27):** coding pass in progress. **Do not** spend more compute comparing SPSA/CEM/CMA-ES until gates 1–2 pass.
+
+The frozen-UnifoLM independent-ESN workstation run ended **0/120** held-out successes. Dominant failure is simulator/control formulation (NaN/QACC, unbounded path accounting, proprio-only ESN asked to invent contact), not optimizer choice.
+
+1. **Stabilize benchmark** — NaN terminate, reject cloth jumps >5 cm, bound all `L_*` to `[0,1]`, separate component losses, `teacher_source="none"` when `teacher_weight=0`. Tests in `tests/test_wipe_benchmark_stability.py`. Doc: `results/main_independent_esn/BENCHMARK_STABILIZATION.md`.
+2. **Oracle / control baselines** — `notebooks/run_oracle_benchmark_gate.py` (stationary, ZOH, linear, PD; optional UnifoLM+`press_table`). **Go/no-go:** demo replay ≥90% stable+plausible path, 0 NaNs.
+3. **Hierarchical contact layer** — `notebooks/wipe_contact_controller.py`: ESN intent → contact/impedance → joint PD / WBC.
+4. Enrich ESN observations (still no live VLA); improve teacher (DAgger labels, chunk steps, phase weights) only after gates pass.
+5. Retrain sequence: stable oracle → hierarchical contact → BC init → DAgger → residual task opt → 3 dev seeds → freeze → 40 held-out × ≥5 seeds.
+
+**Paper framing:** sparse VLA alone does not enable a proprioception-only ESN for contact-rich wipe; revised question is whether frozen VLA guidance can be distilled into a high-rate recurrent policy when contact regulation stays in a conventional low-level controller.
+
 ### Track P0 — ICRA submit (now → 15 Sep) — polish, don’t reinvent
 
 Sim evidence is largely in. Remaining is honesty, packaging, and deploy credibility.

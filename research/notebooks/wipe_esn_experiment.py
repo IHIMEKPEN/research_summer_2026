@@ -1,16 +1,19 @@
 """Independent state-only ESN experiment used by ``main.ipynb``.
 
-The demonstration is used for a behavior-cloning initializer and a sparse
-teacher cache.  The deployment policy itself receives only MuJoCo
-proprioception: joint position and velocity.  Rollout fine-tuning uses SPSA,
-because the interactive MuJoCo wipe objective is not a ridge-regression target.
+Benchmark stabilization (Aug 2026):
+  - Terminate on NaN / non-finite QACC.
+  - Cloth jumps > 5 cm never inflate path/coverage (see ``wipe_task_metrics``).
+  - Every reported loss term is bounded to ``[0, 1]``.
+  - Component losses are recorded separately.
+  - ``L_teacher`` is only nonzero for a real frozen-UnifoLM cache; held-out /
+    teacher-weight-0 runs report ``teacher_source="none"``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
 import mujoco
 import numpy as np
@@ -20,11 +23,19 @@ STATE_DIM = 58  # q (29) + qdot (29), not q + teacher
 DT = 0.010
 TEACHER_PERIOD = 0.570
 ARM_SLICE = slice(15, 29)
-MIN_WIPE_PATH_M = 0.768  # 5th percentile across all 200 recorded demonstrations
+MIN_WIPE_PATH_M = 0.768
 TARGET_CONTACT_RATIO = 0.90
-TARGET_TABLE_AREA_M2 = 0.36 * 0.56  # declared table top, not unconstrained world area
+TARGET_TABLE_AREA_M2 = 0.36 * 0.56
 TARGET_COVERAGE_RATIO = 0.90
 MAX_CLOTH_JUMP_M = 0.05
+# Reference scales that map raw signals into [0, 1] shortfalls / penalties.
+SMOOTH_REF_MSE = 0.01  # (0.1 rad)^2 mean per-step command change
+TEACHER_REF_MSE = 1.0  # rad^2 mean joint MSE at anchors
+# Physical path sanity: multi-pass wipes can exceed table diagonal, but
+# NaN/teleport runs previously reported tens of meters. Cap rejects those.
+MAX_PLAUSIBLE_WIPE_PATH_M = 8.0
+
+CommandFn = Callable[[float, np.ndarray, np.ndarray], np.ndarray]
 
 
 def joint_state(row) -> np.ndarray:
@@ -59,7 +70,6 @@ def pack_episodes(dataset, episode_ids: Iterable[int]) -> dict[int, dict[str, np
 
 
 def native_states(ep: dict[str, np.ndarray]) -> np.ndarray:
-    """29-D q + finite-difference 29-D qdot at native demo timestamps."""
     q, t = ep["q"], ep["t"]
     qd = np.zeros_like(q)
     dt = np.maximum(np.diff(t), 1e-4)
@@ -68,12 +78,6 @@ def native_states(ep: dict[str, np.ndarray]) -> np.ndarray:
 
 
 def control_grid(ep: dict[str, np.ndarray]):
-    """100 Hz state plumbing plus native-sample action targets.
-
-    Joint positions are interpolated only to construct the controller clock.
-    Each target is the next actually recorded 30 Hz configuration, never an
-    interpolated pseudo-label.
-    """
     rel = ep["t"] - ep["t"][0]
     grid = np.arange(0.0, rel[-1] + 1e-9, DT)
     q = np.stack([np.interp(grid, rel, ep["q"][:, j]) for j in range(G1_DOF)], axis=1)
@@ -85,12 +89,17 @@ def control_grid(ep: dict[str, np.ndarray]):
 
 
 def teacher_cache(ep: dict[str, np.ndarray], duration_s: float | None = None):
-    """Sparse 570 ms proxy cache; replace q values with real VLA+IK outputs."""
     end = float(ep["t"][-1] - ep["t"][0]) if duration_s is None else duration_s
     times = np.arange(0.0, end + 1e-9, TEACHER_PERIOD)
     rel = ep["t"] - ep["t"][0]
     idx = np.searchsorted(rel, times, side="left").clip(0, len(rel) - 1)
     return times.astype(np.float32), ep["q"][idx].astype(np.float32)
+
+
+def _bound01(x: float) -> float:
+    if not np.isfinite(x):
+        return 1.0
+    return float(min(max(x, 0.0), 1.0))
 
 
 @dataclass
@@ -129,13 +138,11 @@ class ESN:
     def act(self, state: np.ndarray, q_reference: np.ndarray | None = None) -> np.ndarray:
         out = self.Wout @ self.features(state)
         if q_reference is not None:
-            # Safety envelope only; q_reference is not an input to the policy.
             out = np.clip(out, q_reference - 0.35, q_reference + 0.35)
         return out.astype(np.float32)
 
 
 def fit_bc_initializer(esn: ESN, episodes: dict[int, dict[str, np.ndarray]], ridge: float = 1.0):
-    """Ridge is only a demo-based initializer, not optimization of L_task."""
     all_states = np.vstack([control_grid(ep)[0][:-1] for ep in episodes.values()])
     esn.mean = all_states.mean(axis=0).astype(np.float32)
     esn.scale = np.maximum(all_states.std(axis=0), 1e-3).astype(np.float32)
@@ -178,20 +185,41 @@ def _make_env(mjcf_path: Path, init_q: np.ndarray):
     return model, data, bind, cloth, initial_base
 
 
-def rollout(
-    esn: ESN,
+# Free-joint DOFs 0..5 often trip mjWARN_BADQACC when we re-pin the floating
+# base each substep; stiff PD also produces large-but-finite actuated qacc.
+# Terminate only on non-finite state — cloth teleports are handled by jump
+# rejection in wipe_task_metrics, not by qacc magnitude heuristics.
+def _sim_unstable(model: mujoco.MjModel, data: mujoco.MjData) -> bool:
+    del model  # reserved for future joint-range checks
+    return not (
+        np.isfinite(data.qpos).all()
+        and np.isfinite(data.qvel).all()
+        and np.isfinite(data.qacc).all()
+        and np.isfinite(data.ctrl).all()
+    )
+
+
+def rollout_policy(
+    command_fn: CommandFn,
     ep: dict[str, np.ndarray],
     mjcf_path: Path,
     *,
     max_s: float | None = None,
     teacher_joint_targets: np.ndarray | None = None,
-    teacher_weight: float = 1.0,
+    teacher_weight: float = 0.0,
     capture_anchors: bool = False,
+    press_table: bool = False,
+    policy_name: str = "policy",
+    contact_controller=None,
 ):
-    """Closed-loop: MuJoCo state -> ESN -> PD -> MuJoCo next state."""
+    """Closed-loop MuJoCo wipe rollout with stabilized loss accounting.
+
+    ``contact_controller``, when provided, must expose ``reset(q0)`` and
+    ``project(q_intent, q_current) -> q_cmd`` (see ``wipe_contact_controller``).
+    """
     from src.g1_dex1 import dex1_width_to_slide
     from src.mujoco_wipe_scene import (
-        CLOTH_HALF_THICKNESS, GRIPPER_GRASP_THRESHOLD, TABLE_BODY_POS,
+        GRIPPER_GRASP_THRESHOLD, TABLE_BODY_POS,
         TABLE_TOP_HALF_EXTENTS, TABLE_TOP_Z,
         WipeClothController,
     )
@@ -201,8 +229,13 @@ def rollout(
     if max_s is not None:
         duration = min(duration, float(max_s))
     model, data, bind, cloth, initial_base = _make_env(mjcf_path, ep["q"][0])
+    if press_table:
+        cloth.press_to_table = True
+    if contact_controller is not None:
+        contact_controller.reset(ep["q"][0].astype(np.float32))
+        if hasattr(contact_controller, "model"):
+            contact_controller.model = model
 
-    # Put the cloth under the first demonstrated closed-gripper hand pose.
     rel = ep["t"] - ep["t"][0]
     closed = np.flatnonzero(ep["gr"] < GRIPPER_GRASP_THRESHOLD)
     if closed.size:
@@ -216,10 +249,20 @@ def rollout(
     mujoco.mj_forward(model, data)
     cloth.reset()
 
+    use_real_teacher = teacher_joint_targets is not None and float(teacher_weight) > 0.0
     teacher_t, proxy_q = teacher_cache(ep, duration)
-    teacher_q = proxy_q if teacher_joint_targets is None else np.asarray(teacher_joint_targets, dtype=np.float32)
-    if len(teacher_q) != len(teacher_t):
-        raise ValueError(f"Teacher cache has {len(teacher_q)} targets for {len(teacher_t)} anchors")
+    if float(teacher_weight) == 0.0:
+        teacher_q = proxy_q
+        teacher_source = "none"
+    elif teacher_joint_targets is None:
+        teacher_q = proxy_q
+        teacher_source = "demonstration_proxy"
+    else:
+        teacher_q = np.asarray(teacher_joint_targets, dtype=np.float32)
+        teacher_source = "frozen_unifolm_cache"
+        if len(teacher_q) != len(teacher_t):
+            raise ValueError(f"Teacher cache has {len(teacher_q)} targets for {len(teacher_t)} anchors")
+
     captures = {"time_s": [], "q": [], "qd": [], "ee_proprio": [], "rgb": []}
     renderer = None
     camera = None
@@ -232,10 +275,12 @@ def rollout(
         camera.type = mujoco.mjtCamera.mjCAMERA_FREE
         camera.distance, camera.azimuth, camera.elevation = 2.15, 118.0, -22.0
         camera.lookat[:] = np.array([0.345, -0.2, 0.88])
+
     next_anchor = 0
     teacher_errors, smooth_errors, limit_penalties = [], [], []
     recorder = WipeTaskMetricsRecorder(
         control_hz=1 / DT, table_top_z=TABLE_TOP_Z,
+        max_cloth_jump_m=MAX_CLOTH_JUMP_M,
         min_wipe_path_m=MIN_WIPE_PATH_M,
         min_table_contact_ratio=TARGET_CONTACT_RATIO,
         min_wipe_coverage_m2=TARGET_TABLE_AREA_M2 * TARGET_COVERAGE_RATIO,
@@ -246,18 +291,37 @@ def rollout(
             float(TABLE_BODY_POS[1] + TABLE_TOP_HALF_EXTENTS[1]),
         ),
     )
-    esn.reset()
     previous_cmd = ep["q"][0].copy()
     steps = int(duration / DT)
+    terminated_unstable = False
+    terminate_step = None
     for k in range(steps):
         sim_t = k * DT
         q = np.asarray(data.qpos[bind.body_qpos_adr], dtype=np.float32).copy()
         qd = np.asarray(data.qvel[bind.body_dof_adr], dtype=np.float32).copy()
-        cmd = esn.act(np.concatenate([q, qd]), q_reference=q)
+        if not (np.isfinite(q).all() and np.isfinite(qd).all()):
+            terminated_unstable = True
+            terminate_step = k
+            break
+        intent = np.asarray(command_fn(sim_t, q, qd), dtype=np.float32).reshape(-1)
+        if intent.size != G1_DOF or not np.isfinite(intent).all():
+            terminated_unstable = True
+            terminate_step = k
+            break
+        if contact_controller is not None:
+            cmd = np.asarray(contact_controller.project(intent, q), dtype=np.float32).reshape(-1)
+        else:
+            cmd = intent
+        if cmd.size != G1_DOF or not np.isfinite(cmd).all():
+            terminated_unstable = True
+            terminate_step = k
+            break
         smooth_errors.append(float(np.mean((cmd - previous_cmd) ** 2)))
-        previous_cmd = cmd
+        previous_cmd = cmd.copy()
+
         if next_anchor < len(teacher_t) and sim_t + DT / 2 >= teacher_t[next_anchor]:
-            teacher_errors.append(float(np.mean((cmd - teacher_q[next_anchor]) ** 2)))
+            if use_real_teacher:
+                teacher_errors.append(float(np.mean((cmd - teacher_q[next_anchor]) ** 2)))
             if renderer is not None:
                 renderer.update_scene(data, camera=camera)
                 captures["time_s"].append(sim_t)
@@ -280,12 +344,27 @@ def rollout(
             mujoco.mj_step(model, data)
             data.qpos[:7] = initial_base
             data.qvel[:6] = 0
+            if _sim_unstable(model, data):
+                terminated_unstable = True
+                break
+        if terminated_unstable:
+            terminate_step = k
+            break
         cloth.update(gr, gl)
         mujoco.mj_forward(model, data)
+        if _sim_unstable(model, data):
+            terminated_unstable = True
+            terminate_step = k
+            break
         hand_pos, _ = cloth._hand_target_pose()
+        cloth_pos = cloth.cloth_position()
+        if not (np.isfinite(hand_pos).all() and np.isfinite(cloth_pos).all()):
+            terminated_unstable = True
+            terminate_step = k
+            break
         recorder.record_step(
             joint_err_sq_mean=float(np.mean((q - cmd) ** 2)),
-            cloth_pos=cloth.cloth_position(), right_hand_pos=hand_pos,
+            cloth_pos=cloth_pos, right_hand_pos=hand_pos,
             right_gripper=gr, cloth_ctrl=cloth,
         )
         joint_ids = model.actuator_trnid[bind.body_actuator_ids, 0].astype(np.int32)
@@ -296,31 +375,57 @@ def rollout(
         limit_penalties.append(float(np.mean(limited)))
 
     metrics = recorder.finalize()
-    task_loss = (
-        (0.0 if metrics.grasp_success else 1.0)
-        + (1.0 - min(metrics.wipe_path_length_m / MIN_WIPE_PATH_M, 1.0))
-        + (1.0 - min(metrics.table_contact_ratio / TARGET_CONTACT_RATIO, 1.0))
-        + (1.0 - min(metrics.wipe_coverage_m2 / (TARGET_TABLE_AREA_M2 * TARGET_COVERAGE_RATIO), 1.0))
-        + 0.01 * float(np.mean(smooth_errors))
-        + float(np.mean(limit_penalties))
-        + min(metrics.max_cloth_jump_m / MAX_CLOTH_JUMP_M, 1.0)
-    )
-    teacher_loss = float(np.mean(teacher_errors)) if teacher_errors else 0.0
     if renderer is not None:
         renderer.close()
+
+    # Bounded component losses in [0, 1].
+    L_grasp = 0.0 if metrics.grasp_success else 1.0
+    L_path = _bound01(1.0 - metrics.wipe_path_length_m / MIN_WIPE_PATH_M)
+    L_contact = _bound01(1.0 - metrics.table_contact_ratio / TARGET_CONTACT_RATIO)
+    L_coverage = _bound01(
+        1.0 - metrics.wipe_coverage_m2 / (TARGET_TABLE_AREA_M2 * TARGET_COVERAGE_RATIO)
+    )
+    L_smooth = _bound01(float(np.mean(smooth_errors)) / SMOOTH_REF_MSE) if smooth_errors else 0.0
+    L_limits = _bound01(float(np.mean(limit_penalties))) if limit_penalties else 0.0
+    L_jump = 1.0 if metrics.max_cloth_jump_m > MAX_CLOTH_JUMP_M else 0.0
+    if terminated_unstable:
+        # Hard failure: saturate every integrity term.
+        L_grasp = L_path = L_contact = L_coverage = L_smooth = L_limits = L_jump = 1.0
+
+    L_task = _bound01(
+        (L_grasp + L_path + L_contact + L_coverage + L_smooth + L_limits + L_jump) / 7.0
+    )
+    if use_real_teacher and teacher_errors:
+        L_teacher = _bound01(float(np.mean(teacher_errors)) / TEACHER_REF_MSE)
+    else:
+        L_teacher = 0.0
+
     metrics.task_success = bool(
-        metrics.task_success
+        (not terminated_unstable)
+        and metrics.task_success
         and metrics.max_cloth_jump_m <= MAX_CLOTH_JUMP_M
-        and float(np.mean(limit_penalties)) == 0.0
+        and L_limits == 0.0
+        and metrics.wipe_path_length_m <= MAX_PLAUSIBLE_WIPE_PATH_M
     )
     result = {
-        "L_task": task_loss,
-        "L_teacher": teacher_loss,
-        "L_total": task_loss + float(teacher_weight) * teacher_loss,
+        "L_task": L_task,
+        "L_grasp": L_grasp,
+        "L_path": L_path,
+        "L_contact": L_contact,
+        "L_coverage": L_coverage,
+        "L_smooth": L_smooth,
+        "L_limits": L_limits,
+        "L_jump": L_jump,
+        "L_teacher": L_teacher,
+        "L_total": _bound01(L_task + float(teacher_weight) * L_teacher),
         "teacher_weight": float(teacher_weight),
-        "teacher_source": "demonstration_proxy" if teacher_joint_targets is None else "frozen_unifolm_cache",
-        "anchors": len(teacher_errors),
-        "joint_limit_violation": bool(float(np.mean(limit_penalties)) > 0.0),
+        "teacher_source": teacher_source,
+        "anchors": len(teacher_errors) if use_real_teacher else 0,
+        "joint_limit_violation": bool(L_limits > 0.0),
+        "terminated_unstable": terminated_unstable,
+        "terminate_step": terminate_step,
+        "policy_name": policy_name,
+        "plausible_path": bool(metrics.wipe_path_length_m <= MAX_PLAUSIBLE_WIPE_PATH_M),
         **metrics.to_dict(),
     }
     if capture_anchors:
@@ -328,8 +433,35 @@ def rollout(
     return result
 
 
+def rollout(
+    esn: ESN,
+    ep: dict[str, np.ndarray],
+    mjcf_path: Path,
+    *,
+    max_s: float | None = None,
+    teacher_joint_targets: np.ndarray | None = None,
+    teacher_weight: float = 0.0,
+    capture_anchors: bool = False,
+    press_table: bool = False,
+):
+    """Closed-loop: MuJoCo state -> ESN -> PD -> MuJoCo next state."""
+    esn.reset()
+
+    def command_fn(_t: float, q: np.ndarray, qd: np.ndarray) -> np.ndarray:
+        return esn.act(np.concatenate([q, qd]), q_reference=q)
+
+    return rollout_policy(
+        command_fn, ep, mjcf_path,
+        max_s=max_s,
+        teacher_joint_targets=teacher_joint_targets,
+        teacher_weight=teacher_weight,
+        capture_anchors=capture_anchors,
+        press_table=press_table,
+        policy_name="esn",
+    )
+
+
 def spsa_finetune(esn: ESN, ep: dict[str, np.ndarray], mjcf_path: Path, *, iterations=2, seed=1):
-    """Two-rollout SPSA updates of Wout through the non-differentiable simulator."""
     rng = np.random.default_rng(seed)
     history = []
     accepted_metrics = rollout(esn, ep, mjcf_path)
