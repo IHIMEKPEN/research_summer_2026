@@ -56,6 +56,19 @@ validated force control. A later hardware or compliant-contact experiment must
 add a calibrated force sensor and define a task-specific safe force band.
 
 The 5 cm jump gate is a simulator-integrity check that rejects policies which
-exploit the mocap attachment instead of wiping. The 90% contact and coverage gates are preregistered engineering criteria,
+exploit the mocap attachment instead of wiping. **Stabilized accounting (2026-08-27):**
+jumps above 5 cm are excluded from wipe-path and coverage accumulation before
+they can inflate scores; rollouts terminate immediately on NaN/QACC instability;
+every reported loss component is bounded to `[0, 1]` and logged separately
+(`L_grasp`, `L_path`, `L_contact`, `L_coverage`, `L_smooth`, `L_limits`,
+`L_teacher`). Held-out / `teacher_weight=0` evaluations must report
+`teacher_source="none"` with `L_teacher=0` — never demonstration-proxy loss
+disguised as a real teacher.
+
+The 90% contact and coverage gates are preregistered engineering criteria,
 motivated by the sources above. They are not universal standards. Results must
 include sensitivity analysis at 80%, 90%, and 95%.
+
+**Go/no-go before further ESN optimizer work:** demonstration replay must achieve
+stable contact and a plausible path on ≥90% of evaluated episodes with zero NaNs
+(`notebooks/run_oracle_benchmark_gate.py`). See `BENCHMARK_STABILIZATION.md`.

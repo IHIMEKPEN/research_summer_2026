@@ -1,6 +1,4 @@
-"""
-Numerical benchmark metrics for G1 wipe-table MuJoCo evaluation (Step 4).
-"""
+"""Stabilized wipe-task metrics: jumps above 5 cm never inflate path or coverage."""
 
 from __future__ import annotations
 
@@ -17,6 +15,9 @@ from src.mujoco_wipe_scene import (
     TABLE_TOP_Z,
     WipeClothController,
 )
+
+# Hard integrity gate shared with the independent-ESN experiment.
+MAX_CLOTH_JUMP_M = 0.05
 
 
 @dataclass
@@ -36,6 +37,7 @@ class WipeTaskMetrics:
     table_contact_ratio: float = 0.0
     wipe_coverage_m2: float = 0.0
     wipe_phase_frames: int = 0
+    rejected_jump_segments: int = 0
     task_success: bool = False
     steps: int = 0
 
@@ -52,12 +54,10 @@ class WipeTaskMetricsRecorder:
     table_contact_z_tol: float = TABLE_CONTACT_Z_TOL
     control_hz: float = 100.0
     coverage_cell_m: float = 0.02
-    # Task-success gates (oracle wipe quality, not live VLA closed-loop).
+    max_cloth_jump_m: float = MAX_CLOTH_JUMP_M
     min_wipe_path_m: float = 0.30
     min_table_contact_ratio: float = 0.15
     min_wipe_coverage_m2: float = 0.008
-    # Optional [xmin, xmax, ymin, ymax]; coverage outside the declared target
-    # surface does not count toward cleaning success.
     target_xy_bounds: Optional[Tuple[float, float, float, float]] = None
 
     _joint_sq_err: List[float] = field(default_factory=list)
@@ -110,13 +110,11 @@ class WipeTaskMetricsRecorder:
         self._grasped_flags.append(grasped)
 
     def _in_table_contact(self, cloth_z: np.ndarray) -> np.ndarray:
-        """Cloth underside within ``tol`` above this episode's table plane."""
         underside = np.asarray(cloth_z, dtype=np.float64) - CLOTH_HALF_THICKNESS
         gap = underside - float(self.table_top_z)
         return (gap >= -0.002) & (gap <= float(self.table_contact_z_tol))
 
     def _footprint_cells(self, xy: np.ndarray) -> Set[Tuple[int, int]]:
-        """Axis-aligned cloth footprint cells (ignore yaw — conservative wipe area)."""
         cell = float(self.coverage_cell_m)
         hx, hy = float(CLOTH_HALF_EXTENTS[0]), float(CLOTH_HALF_EXTENTS[1])
         cells: Set[Tuple[int, int]] = set()
@@ -164,8 +162,11 @@ class WipeTaskMetricsRecorder:
 
         if n > 1:
             jumps = np.linalg.norm(np.diff(cloth, axis=0), axis=1)
-            metrics.max_cloth_jump_m = float(jumps.max())
-            metrics.mean_cloth_jump_m = float(jumps.mean())
+            finite = np.isfinite(jumps)
+            if finite.any():
+                metrics.max_cloth_jump_m = float(np.nanmax(jumps))
+                metrics.mean_cloth_jump_m = float(np.nanmean(jumps[finite]))
+            metrics.rejected_jump_segments = int(np.sum(jumps > self.max_cloth_jump_m))
 
         if self._first_grasp_proximity is not None:
             metrics.grasp_proximity_error_m = self._first_grasp_proximity
@@ -174,15 +175,29 @@ class WipeTaskMetricsRecorder:
         grasped_mask = np.asarray(self._grasped_flags, dtype=bool)
         if grasped_mask.any():
             metrics.wipe_phase_frames = int(grasped_mask.sum())
-            xy = cloth[grasped_mask, :2]
-            if xy.shape[0] > 1:
-                metrics.wipe_path_length_m = float(
-                    np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1))
-                )
-            contact = self._in_table_contact(cloth[grasped_mask, 2])
-            metrics.table_contact_ratio = float(contact.mean())
-            if contact.any():
-                cells = self._footprint_cells(xy[contact])
+            # Path / coverage only accumulate along non-jumping grasped segments.
+            path = 0.0
+            valid_contact_xy: List[np.ndarray] = []
+            contact_ok = 0
+            contact_n = 0
+            idxs = np.flatnonzero(grasped_mask)
+            for i_prev, i_cur in zip(idxs[:-1], idxs[1:]):
+                if i_cur != i_prev + 1:
+                    continue  # gap in grasp — do not bridge
+                delta = cloth[i_cur] - cloth[i_prev]
+                step = float(np.linalg.norm(delta[:2]))
+                jump3 = float(np.linalg.norm(delta))
+                if not np.isfinite(jump3) or jump3 > self.max_cloth_jump_m:
+                    continue
+                path += step
+                contact_n += 1
+                if self._in_table_contact(cloth[i_cur, 2]):
+                    contact_ok += 1
+                    valid_contact_xy.append(cloth[i_cur, :2])
+            metrics.wipe_path_length_m = float(path)
+            metrics.table_contact_ratio = float(contact_ok / contact_n) if contact_n else 0.0
+            if valid_contact_xy:
+                cells = self._footprint_cells(np.stack(valid_contact_xy, axis=0))
                 metrics.wipe_coverage_m2 = float(
                     len(cells) * self.coverage_cell_m * self.coverage_cell_m
                 )
@@ -192,5 +207,6 @@ class WipeTaskMetricsRecorder:
             and metrics.wipe_path_length_m >= self.min_wipe_path_m
             and metrics.table_contact_ratio >= self.min_table_contact_ratio
             and metrics.wipe_coverage_m2 >= self.min_wipe_coverage_m2
+            and metrics.max_cloth_jump_m <= self.max_cloth_jump_m
         )
         return metrics

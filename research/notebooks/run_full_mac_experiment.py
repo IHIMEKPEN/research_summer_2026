@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import utils.transport
+import utils.session
 import argparse, csv, json, platform, time
 from datetime import datetime, timezone
 from pathlib import Path
