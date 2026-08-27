@@ -56,6 +56,9 @@ class WipeTaskMetricsRecorder:
     min_wipe_path_m: float = 0.30
     min_table_contact_ratio: float = 0.15
     min_wipe_coverage_m2: float = 0.008
+    # Optional [xmin, xmax, ymin, ymax]; coverage outside the declared target
+    # surface does not count toward cleaning success.
+    target_xy_bounds: Optional[Tuple[float, float, float, float]] = None
 
     _joint_sq_err: List[float] = field(default_factory=list)
     _cloth_positions: List[np.ndarray] = field(default_factory=list)
@@ -124,6 +127,11 @@ class WipeTaskMetricsRecorder:
             j1 = int(np.floor((y + hy) / cell))
             for i in range(i0, i1 + 1):
                 for j in range(j0, j1 + 1):
+                    if self.target_xy_bounds is not None:
+                        xmin, xmax, ymin, ymax = self.target_xy_bounds
+                        cx, cy = (i + 0.5) * cell, (j + 0.5) * cell
+                        if not (xmin <= cx <= xmax and ymin <= cy <= ymax):
+                            continue
                     cells.add((i, j))
         return cells
 

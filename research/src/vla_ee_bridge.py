@@ -69,6 +69,16 @@ def rotmat_to_rot6d(rot: np.ndarray) -> np.ndarray:
     return rot.reshape(3, 3)[:, :2].reshape(6).astype(np.float32)
 
 
+def rot6d_to_rotmat(rot6d: np.ndarray) -> np.ndarray:
+    """Continuous 6-D representation back to a proper rotation matrix."""
+    cols = np.asarray(rot6d, dtype=np.float64).reshape(3, 2)
+    c0 = cols[:, 0] / max(float(np.linalg.norm(cols[:, 0])), 1e-9)
+    c1 = cols[:, 1] - c0 * float(np.dot(c0, cols[:, 1]))
+    c1 /= max(float(np.linalg.norm(c1)), 1e-9)
+    c2 = np.cross(c0, c1)
+    return np.column_stack([c0, c1, c2])
+
+
 def build_wipe_table_model(robot_mjcf: Path) -> mujoco.MjModel:
     """Compile G1 + Dex1-1 + wipe table (static cloth geom) aligned with ``mujoco_wipe_scene``."""
     # Keep IK / Step-3 static scene consistent with interactive Step-4 geometry.
@@ -251,6 +261,48 @@ def _ik_arm_to_position(
     return target.astype(np.float32)
 
 
+def _ik_arm_to_pose(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    joints_29d: np.ndarray,
+    *,
+    arm_slice: slice,
+    hand_body: str,
+    joint_names: Sequence[str],
+    target_xyz: np.ndarray,
+    target_rot6d: np.ndarray,
+    steps: int = 40,
+    step_scale: float = 0.30,
+    rotation_weight: float = 0.35,
+) -> np.ndarray:
+    """Damped 6-D Jacobian IK for position and orientation."""
+    target = np.asarray(joints_29d, dtype=np.float64).copy()
+    dof_ids = _joint_dof_indices(model, joint_names)
+    hand_id = _body_id(model, hand_body)
+    target_xyz = np.asarray(target_xyz, dtype=np.float64).reshape(3)
+    target_rot = rot6d_to_rotmat(target_rot6d)
+    for _ in range(steps):
+        set_joint_positions_in_data(model, data, target)
+        current_rot = data.xmat[hand_id].reshape(3, 3)
+        pos_err = target_xyz - data.xpos[hand_id]
+        # World-frame small-angle error: vee((R_t R_c^T - R_c R_t^T)/2).
+        rel = target_rot @ current_rot.T
+        rot_err = 0.5 * np.array(
+            [rel[2, 1] - rel[1, 2], rel[0, 2] - rel[2, 0], rel[1, 0] - rel[0, 1]],
+            dtype=np.float64,
+        )
+        if np.linalg.norm(pos_err) < 1e-3 and np.linalg.norm(rot_err) < np.deg2rad(1.0):
+            break
+        jacp = np.zeros((3, model.nv), dtype=np.float64)
+        jacr = np.zeros((3, model.nv), dtype=np.float64)
+        mujoco.mj_jac(model, data, jacp, jacr, data.xpos[hand_id], hand_id)
+        jac = np.vstack([jacp[:, dof_ids], rotation_weight * jacr[:, dof_ids]])
+        err = np.concatenate([pos_err, rotation_weight * rot_err])
+        dq = jac.T @ np.linalg.solve(jac @ jac.T + 2e-4 * np.eye(6), err)
+        target[arm_slice] += step_scale * np.clip(dq, -0.15, 0.15)
+    return target.astype(np.float32)
+
+
 def clip_ee_action_to_wipe_workspace(ee_action_23d: np.ndarray) -> np.ndarray:
     """Clamp left/right EE xyz into the wipe table workspace before IK."""
     ee = np.asarray(ee_action_23d, dtype=np.float32).reshape(-1).copy()
@@ -344,7 +396,7 @@ def ee_action_to_joint_target(
     target[LEG_SLICE] = current[LEG_SLICE]
     target[WAIST_SLICE] = np.clip(ee[18:21], -0.8, 0.8)
 
-    target = _ik_arm_to_position(
+    target = _ik_arm_to_pose(
         model,
         data,
         target,
@@ -352,8 +404,9 @@ def ee_action_to_joint_target(
         hand_body=LEFT_HAND_BODY,
         joint_names=ARM_JOINT_NAMES[0],
         target_xyz=ee[0:3],
+        target_rot6d=ee[3:9],
     )
-    target = _ik_arm_to_position(
+    target = _ik_arm_to_pose(
         model,
         data,
         target,
@@ -361,6 +414,7 @@ def ee_action_to_joint_target(
         hand_body=RIGHT_HAND_BODY,
         joint_names=ARM_JOINT_NAMES[1],
         target_xyz=ee[9:12],
+        target_rot6d=ee[12:18],
     )
     target = clip_joints_to_model_limits(model, target)
     target[LEG_SLICE] = current[LEG_SLICE]

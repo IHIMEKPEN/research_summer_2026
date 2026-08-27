@@ -171,8 +171,8 @@ class WipeClothController:
     grasp_proximity_m: float = GRASP_PROXIMITY_M
     attach_blend_steps: int = ATTACH_BLEND_STEPS
     release_blend_steps: int = RELEASE_BLEND_STEPS
-    table_pos: np.ndarray = CLOTH_TABLE_POS
-    hand_offset: np.ndarray = CLOTH_HAND_OFFSET
+    table_pos: np.ndarray = field(default_factory=lambda: CLOTH_TABLE_POS.copy())
+    hand_offset: np.ndarray = field(default_factory=lambda: CLOTH_HAND_OFFSET.copy())
     # Live wipe: while held, keep cloth on the table plane (hand drives XY only).
     press_to_table: bool = False
     press_contact_gap_m: float = 0.012

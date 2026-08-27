@@ -1,0 +1,10 @@
+{
+  "pose_targets": 20,
+  "position_perturbation_bound_m": 0.01,
+  "orientation_perturbation_bound_deg": 5,
+  "mean_position_error_m": 0.0010254754588208356,
+  "p95_position_error_m": 0.0011250792268440353,
+  "mean_orientation_error_deg": 0.2738638428108585,
+  "p95_orientation_error_deg": 0.6680675099195037,
+  "pass": true
+}

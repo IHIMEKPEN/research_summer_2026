@@ -1,0 +1,16 @@
+{
+  "schema": "unifolm_visited_observations_v1",
+  "created_utc": "2026-08-27T02:52:37.887276+00:00",
+  "episode": 0,
+  "policy_seed": 0,
+  "instruction": "Wipe the water off the table with the cloth.",
+  "anchors": 22,
+  "rgb_shape": [
+    22,
+    224,
+    224,
+    3
+  ],
+  "proprio_semantics": "23-D [L_xyz,L_rot6d,R_xyz,R_rot6d,waist5]",
+  "teacher_period_s": 0.57
+}
