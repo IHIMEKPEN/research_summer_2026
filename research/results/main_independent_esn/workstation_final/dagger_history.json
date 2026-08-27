@@ -1,0 +1,295 @@
+{
+  "history": [
+    {
+      "round": 0,
+      "bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_ep0_seed0.npz",
+      "teacher_cache": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_ep0_seed0.npz",
+      "anchors": 22,
+      "checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_bc_init_seed0.npz",
+      "validate": {
+        "ready": true,
+        "anchors": 22,
+        "ee_shape": [
+          22,
+          23
+        ],
+        "joint_shape": [
+          22,
+          29
+        ],
+        "mock": false,
+        "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+        "unnorm_key": "g1_wipe_table",
+        "instruction": "Wipe the water off the table with the cloth.",
+        "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+        "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_ep0_seed0.npz",
+        "chunk_step_selected": 0,
+        "chunk_step_reason": "Select immediate next EE action (chunk index 0) for the sparse 570 ms teacher loss; later chunk steps are open-loop futures unused by the state-only ESN teacher term.",
+        "times_match_bundle": true
+      },
+      "elapsed_s": 77.47474401630461
+    },
+    {
+      "round": 1,
+      "accepted": true,
+      "val_L_task_mean": 909.944990419368,
+      "val_rows": [
+        {
+          "L_task": 1524.2770810603088,
+          "L_teacher": 4.562514233506388,
+          "L_total": 1524.2770810603088,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 27,
+          "grasp_success": true,
+          "wipe_path_length_m": 99.86486326254754,
+          "table_contact_ratio": 0.03540772532188841,
+          "wipe_coverage_m2": 0.0516,
+          "max_cloth_jump_m": 1.1173647775972695,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 4,
+          "round": 1
+        },
+        {
+          "L_task": 1098.3814862315073,
+          "L_teacher": 2.329058124540517,
+          "L_total": 1098.3814862315073,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 26,
+          "grasp_success": true,
+          "wipe_path_length_m": 103.70524732470824,
+          "table_contact_ratio": 0.058762886597938144,
+          "wipe_coverage_m2": 0.15200000000000002,
+          "max_cloth_jump_m": 0.9519255484991902,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 5,
+          "round": 1
+        },
+        {
+          "L_task": 107.17640396628781,
+          "L_teacher": 2.1649208313061132,
+          "L_total": 107.17640396628781,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 18,
+          "grasp_success": true,
+          "wipe_path_length_m": 59.787134253292606,
+          "table_contact_ratio": 0.058919803600654665,
+          "wipe_coverage_m2": 0.12240000000000001,
+          "max_cloth_jump_m": 0.8546737586165385,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 6,
+          "round": 1
+        }
+      ],
+      "opt_history_len": 5,
+      "bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round01_ep0_seed0.npz",
+      "teacher_cache": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_round01_ep0_seed0.npz",
+      "anchors": 22,
+      "checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round01_seed0.npz",
+      "best_checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round01_seed0.npz",
+      "validate": {
+        "ready": true,
+        "anchors": 22,
+        "ee_shape": [
+          22,
+          23
+        ],
+        "joint_shape": [
+          22,
+          29
+        ],
+        "mock": false,
+        "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+        "unnorm_key": "g1_wipe_table",
+        "instruction": "Wipe the water off the table with the cloth.",
+        "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+        "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round01_ep0_seed0.npz",
+        "chunk_step_selected": 0,
+        "chunk_step_reason": "Select immediate next EE action (chunk index 0) for the sparse 570 ms teacher loss; later chunk steps are open-loop futures unused by the state-only ESN teacher term.",
+        "times_match_bundle": true
+      },
+      "elapsed_s": 246.35641210433096
+    },
+    {
+      "round": 2,
+      "accepted": true,
+      "val_L_task_mean": 354.2800020057448,
+      "val_rows": [
+        {
+          "L_task": 176.4502082919031,
+          "L_teacher": 3.2877193572758525,
+          "L_total": 176.4502082919031,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 27,
+          "grasp_success": true,
+          "wipe_path_length_m": 69.07908509738559,
+          "table_contact_ratio": 0.032803180914512925,
+          "wipe_coverage_m2": 0.1452,
+          "max_cloth_jump_m": 0.7572966930519577,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 4,
+          "round": 2
+        },
+        {
+          "L_task": 815.8490467029579,
+          "L_teacher": 1.8781134693955,
+          "L_total": 815.8490467029579,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 26,
+          "grasp_success": true,
+          "wipe_path_length_m": 45.37597265478395,
+          "table_contact_ratio": 0.06306306306306306,
+          "wipe_coverage_m2": 0.1392,
+          "max_cloth_jump_m": 1.242350220649837,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 5,
+          "round": 2
+        },
+        {
+          "L_task": 70.54075102237343,
+          "L_teacher": 2.9354746378958225,
+          "L_total": 70.54075102237343,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 18,
+          "grasp_success": true,
+          "wipe_path_length_m": 31.954062403722666,
+          "table_contact_ratio": 0.0297029702970297,
+          "wipe_coverage_m2": 0.1336,
+          "max_cloth_jump_m": 0.9725358905399394,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 6,
+          "round": 2
+        }
+      ],
+      "opt_history_len": 5,
+      "bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round02_ep0_seed0.npz",
+      "teacher_cache": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_round02_ep0_seed0.npz",
+      "anchors": 22,
+      "checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round02_seed0.npz",
+      "best_checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round02_seed0.npz",
+      "validate": {
+        "ready": true,
+        "anchors": 22,
+        "ee_shape": [
+          22,
+          23
+        ],
+        "joint_shape": [
+          22,
+          29
+        ],
+        "mock": false,
+        "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+        "unnorm_key": "g1_wipe_table",
+        "instruction": "Wipe the water off the table with the cloth.",
+        "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+        "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round02_ep0_seed0.npz",
+        "chunk_step_selected": 0,
+        "chunk_step_reason": "Select immediate next EE action (chunk index 0) for the sparse 570 ms teacher loss; later chunk steps are open-loop futures unused by the state-only ESN teacher term.",
+        "times_match_bundle": true
+      },
+      "elapsed_s": 417.3361245598644
+    },
+    {
+      "round": 3,
+      "accepted": false,
+      "val_L_task_mean": 1402.3500421382523,
+      "val_rows": [
+        {
+          "L_task": 26.33988046093019,
+          "L_teacher": 61.85987047450962,
+          "L_total": 26.33988046093019,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 27,
+          "grasp_success": true,
+          "wipe_path_length_m": 105.77189861858093,
+          "table_contact_ratio": 0.08690987124463519,
+          "wipe_coverage_m2": 0.04,
+          "max_cloth_jump_m": 1.0277952735502582,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 4,
+          "round": 3
+        },
+        {
+          "L_task": 1422.77649647272,
+          "L_teacher": 2063547.4872622364,
+          "L_total": 1422.77649647272,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 26,
+          "grasp_success": true,
+          "wipe_path_length_m": 108.46683110793543,
+          "table_contact_ratio": 0.079002079002079,
+          "wipe_coverage_m2": 0.09480000000000001,
+          "max_cloth_jump_m": 0.9336384436847092,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 5,
+          "round": 3
+        },
+        {
+          "L_task": 2757.933749481107,
+          "L_teacher": 44750.39078955332,
+          "L_total": 2757.933749481107,
+          "teacher_weight": 0.0,
+          "teacher_source": "demonstration_proxy",
+          "anchors": 18,
+          "grasp_success": true,
+          "wipe_path_length_m": 70.55747728089699,
+          "table_contact_ratio": 0.08666666666666667,
+          "wipe_coverage_m2": 0.0816,
+          "max_cloth_jump_m": 0.8972112573537636,
+          "joint_limit_violation": true,
+          "task_success": false,
+          "episode": 6,
+          "round": 3
+        }
+      ],
+      "opt_history_len": 5,
+      "bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round03_ep0_seed0.npz",
+      "teacher_cache": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_round03_ep0_seed0.npz",
+      "anchors": 22,
+      "checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round03_seed0.npz",
+      "best_checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round02_seed0.npz",
+      "validate": {
+        "ready": true,
+        "anchors": 22,
+        "ee_shape": [
+          22,
+          23
+        ],
+        "joint_shape": [
+          22,
+          29
+        ],
+        "mock": false,
+        "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+        "unnorm_key": "g1_wipe_table",
+        "instruction": "Wipe the water off the table with the cloth.",
+        "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+        "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round03_ep0_seed0.npz",
+        "chunk_step_selected": 0,
+        "chunk_step_reason": "Select immediate next EE action (chunk index 0) for the sparse 570 ms teacher loss; later chunk steps are open-loop futures unused by the state-only ESN teacher term.",
+        "times_match_bundle": true
+      },
+      "elapsed_s": 595.4315648535267
+    }
+  ],
+  "best_checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round02_seed0.npz",
+  "final_checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_final_selected.npz",
+  "best_val_L_task": 354.2800020057448,
+  "teacher_cache": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_round03_ep0_seed0.npz"
+}

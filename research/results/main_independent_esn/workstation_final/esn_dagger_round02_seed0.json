@@ -1,0 +1,23 @@
+{
+  "stage": "dagger",
+  "round": 2,
+  "accepted": true,
+  "val_L_task_mean": 354.2800020057448,
+  "train_metrics": {
+    "L_task": 164.55199414568256,
+    "L_teacher": 3.2418653585694055,
+    "L_total": 167.79385950425197,
+    "teacher_weight": 1.0,
+    "teacher_source": "frozen_unifolm_cache",
+    "anchors": 22,
+    "grasp_success": true,
+    "wipe_path_length_m": 45.17739043589992,
+    "table_contact_ratio": 0.053061224489795916,
+    "wipe_coverage_m2": 0.13240000000000002,
+    "max_cloth_jump_m": 0.9144323098976691,
+    "joint_limit_violation": true,
+    "task_success": false
+  },
+  "checkpoint_sha256": "2f76c7624314a58c3ed8eecedcbb5dab8e9735fff2e099380fb95729e84f41ad",
+  "path": "/raid/data/aihimekpen/research_summer_2026/results/main_independent_esn/workstation_final/esn_dagger_round02_seed0.npz"
+}

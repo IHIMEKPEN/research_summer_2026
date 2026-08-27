@@ -224,6 +224,8 @@ def rollout(
     renderer = None
     camera = None
     if capture_anchors:
+        import os
+        os.environ.setdefault("MUJOCO_GL", "egl")
         from src.vla_ee_bridge import joints_to_ee_proprio
         renderer = mujoco.Renderer(model, height=224, width=224)
         camera = mujoco.MjvCamera()
@@ -318,6 +320,7 @@ def rollout(
         "teacher_weight": float(teacher_weight),
         "teacher_source": "demonstration_proxy" if teacher_joint_targets is None else "frozen_unifolm_cache",
         "anchors": len(teacher_errors),
+        "joint_limit_violation": bool(float(np.mean(limit_penalties)) > 0.0),
         **metrics.to_dict(),
     }
     if capture_anchors:

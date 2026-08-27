@@ -1,0 +1,6 @@
+{
+  "stage": "final_selected",
+  "source": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_dagger_round02_seed0.npz",
+  "checkpoint_sha256": "2f76c7624314a58c3ed8eecedcbb5dab8e9735fff2e099380fb95729e84f41ad",
+  "path": "/raid/data/aihimekpen/research_summer_2026/results/main_independent_esn/workstation_final/esn_final_selected.npz"
+}

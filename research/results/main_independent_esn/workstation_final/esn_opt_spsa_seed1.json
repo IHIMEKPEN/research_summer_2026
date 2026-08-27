@@ -1,0 +1,7 @@
+{
+  "method": "spsa",
+  "seed": 1,
+  "val_L_task_mean": 1004.3420591151347,
+  "checkpoint_sha256": "42c09b0bf5359a2b73f27eaee68216f7fa0d86b52508a322a27c199f078108c0",
+  "path": "/raid/data/aihimekpen/research_summer_2026/results/main_independent_esn/workstation_final/esn_opt_spsa_seed1.npz"
+}

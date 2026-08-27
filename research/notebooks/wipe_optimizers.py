@@ -30,7 +30,20 @@ def _objective(esn, adapter, theta, ep, mjcf, teacher_targets=None):
     adapter.apply(esn, theta)
     # Without a validated real cache, optimizer comparison is task-only.
     weight = 1.0 if teacher_targets is not None else 0.0
-    return rollout(esn, ep, mjcf, teacher_joint_targets=teacher_targets, teacher_weight=weight)
+    try:
+        result = rollout(esn, ep, mjcf, teacher_joint_targets=teacher_targets, teacher_weight=weight)
+    except Exception as exc:
+        return {
+            "L_task": 1e6, "L_teacher": 1e6, "L_total": 1e6,
+            "teacher_weight": weight, "teacher_source": "error",
+            "anchors": 0, "grasp_success": False, "task_success": False,
+            "wipe_path_length_m": 0.0, "table_contact_ratio": 0.0,
+            "wipe_coverage_m2": 0.0, "max_cloth_jump_m": 1.0,
+            "joint_limit_violation": True, "error": str(exc),
+        }
+    if not np.isfinite(result["L_total"]):
+        result = {**result, "L_task": 1e6, "L_teacher": 1e6, "L_total": 1e6, "task_success": False}
+    return result
 
 
 def random_search(esn, ep, mjcf: Path, *, budget=12, seed=0, teacher_targets=None):
@@ -82,6 +95,44 @@ def cem(esn, ep, mjcf: Path, *, budget=12, seed=0, teacher_targets=None, populat
             history.append({"evaluation": used, "best_L": best["L_total"], **result})
         scored.sort(key=lambda x: x[0]); elite = np.stack([x[1] for x in scored[:max(1,n//2)]])
         mean = elite.mean(axis=0); std = np.maximum(elite.std(axis=0), 0.01)
+    adapter.apply(esn, best_t)
+    return best_t, best, history
+
+
+def cmaes_lite(esn, ep, mjcf: Path, *, budget=12, seed=0, teacher_targets=None, population=4):
+    """Budget-matched CMA-ES-style search (rank-μ mean/covariance update, no extra deps)."""
+    rng = np.random.default_rng(seed)
+    adapter = ArmReadoutAdapter(esn.Wout.copy())
+    dim = adapter.dim
+    mean = np.zeros(dim, dtype=np.float64)
+    sigma = 0.06
+    cov = np.eye(dim, dtype=np.float64)
+    best_t = mean.copy()
+    best = _objective(esn, adapter, best_t, ep, mjcf, teacher_targets)
+    history = [{"evaluation": 0, **best}]
+    used = 0
+    while used < budget:
+        n = min(population, budget - used)
+        samples = []
+        scored = []
+        for _ in range(n):
+            z = rng.multivariate_normal(np.zeros(dim), cov)
+            theta = np.clip(mean + sigma * z, -0.2, 0.2)
+            result = _objective(esn, adapter, theta, ep, mjcf, teacher_targets)
+            used += 1
+            scored.append((result["L_total"], theta, result))
+            samples.append(theta)
+            if result["L_total"] < best["L_total"]:
+                best_t, best = theta.copy(), result
+            history.append({"evaluation": used, "best_L": best["L_total"], **result})
+        scored.sort(key=lambda x: x[0])
+        elite_n = max(1, n // 2)
+        elite = np.stack([x[1] for x in scored[:elite_n]])
+        mean = elite.mean(axis=0)
+        centered = elite - mean
+        cov = (centered.T @ centered) / max(elite_n, 1) + 1e-4 * np.eye(dim)
+        # Keep step-size from collapsing under tiny budgets.
+        sigma = float(np.clip(0.9 * sigma + 0.1 * np.mean(np.linalg.norm(centered, axis=1)), 0.01, 0.12))
     adapter.apply(esn, best_t)
     return best_t, best, history
 

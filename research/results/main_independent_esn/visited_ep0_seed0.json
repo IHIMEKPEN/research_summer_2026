@@ -12,5 +12,8 @@
     3
   ],
   "proprio_semantics": "23-D [L_xyz,L_rot6d,R_xyz,R_rot6d,waist5]",
-  "teacher_period_s": 0.57
+  "teacher_period_s": 0.57,
+  "policy_id": "bc_initializer_seed0",
+  "policy_checkpoint": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/workstation_final/esn_bc_init_seed0.npz",
+  "dagger_round": 0
 }

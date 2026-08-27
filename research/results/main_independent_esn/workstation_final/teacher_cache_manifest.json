@@ -1,0 +1,49 @@
+{
+  "caches": [
+    {
+      "path": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_ep0_seed0.npz",
+      "sha256": "82d2593411d55bf958dd61c22300b35ddfc78e22e55414d2603993208d6ea268",
+      "bytes": 7510,
+      "anchors": 22,
+      "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+      "unnorm_key": "g1_wipe_table",
+      "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+      "chunk_step_selected": 0,
+      "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_ep0_seed0.npz"
+    },
+    {
+      "path": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_round01_ep0_seed0.npz",
+      "sha256": "69d97605e91431f5881f8617c953e887ee282f5aab2ac4ebf97697909838b00c",
+      "bytes": 7558,
+      "anchors": 22,
+      "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+      "unnorm_key": "g1_wipe_table",
+      "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+      "chunk_step_selected": 0,
+      "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round01_ep0_seed0.npz"
+    },
+    {
+      "path": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_round02_ep0_seed0.npz",
+      "sha256": "538208d43cafa11535ac22d4a2fc5e087e37aebb8237375ae2993a9659ffd908",
+      "bytes": 7507,
+      "anchors": 22,
+      "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+      "unnorm_key": "g1_wipe_table",
+      "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+      "chunk_step_selected": 0,
+      "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round02_ep0_seed0.npz"
+    },
+    {
+      "path": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/teacher_round03_ep0_seed0.npz",
+      "sha256": "beef40e8e3773006611425ccabd91e6fb707d98ff61f268af0475e7ea351b6b0",
+      "bytes": 7487,
+      "anchors": 22,
+      "model_id": "unitreerobotics/UnifoLM-VLA-Base",
+      "unnorm_key": "g1_wipe_table",
+      "checkpoint_sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+      "chunk_step_selected": 0,
+      "source_bundle": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_round03_ep0_seed0.npz"
+    }
+  ],
+  "mock_any": false
+}

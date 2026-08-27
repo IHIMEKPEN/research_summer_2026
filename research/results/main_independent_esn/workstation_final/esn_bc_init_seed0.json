@@ -1,0 +1,12 @@
+{
+  "stage": "bc_initializer",
+  "episodes": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "seed": 0,
+  "checkpoint_sha256": "1b7a6e6b3e1793c69e1bd1f0a4423ed859a199a7e44dbd368521b86ce4497051",
+  "path": "/raid/data/aihimekpen/research_summer_2026/results/main_independent_esn/workstation_final/esn_bc_init_seed0.npz"
+}

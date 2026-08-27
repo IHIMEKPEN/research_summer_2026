@@ -1,0 +1,7 @@
+{
+  "method": "random",
+  "seed": 1,
+  "val_L_task_mean": 1293.2686838416646,
+  "checkpoint_sha256": "ed30fab154251eeec546103775b662926d08e2da0d5e0912ae89eb92f2f4f64a",
+  "path": "/raid/data/aihimekpen/research_summer_2026/results/main_independent_esn/workstation_final/esn_opt_random_seed1.npz"
+}

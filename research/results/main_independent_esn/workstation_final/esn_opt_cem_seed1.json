@@ -1,0 +1,7 @@
+{
+  "method": "cem",
+  "seed": 1,
+  "val_L_task_mean": 2426.943930564185,
+  "checkpoint_sha256": "7fdcfac92fa86e5080a14d4509b701dfcb9775e8b3dfbc845b0f6d7ec3f8999d",
+  "path": "/raid/data/aihimekpen/research_summer_2026/results/main_independent_esn/workstation_final/esn_opt_cem_seed1.npz"
+}

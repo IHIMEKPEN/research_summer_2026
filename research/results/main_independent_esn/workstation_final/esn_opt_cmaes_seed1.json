@@ -1,0 +1,7 @@
+{
+  "method": "cmaes",
+  "seed": 1,
+  "val_L_task_mean": 861.5608279628394,
+  "checkpoint_sha256": "31bdda09a66f4e9062212f7864357a3e31c1bca9c1fe1c4aaaf880dd20166374",
+  "path": "/raid/data/aihimekpen/research_summer_2026/results/main_independent_esn/workstation_final/esn_opt_cmaes_seed1.npz"
+}

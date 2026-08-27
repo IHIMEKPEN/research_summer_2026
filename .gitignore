@@ -39,6 +39,16 @@ research/models/**
 !research/results/**/mujoco_eval_report.json
 !research/results/**/esn_hyperparam_sweep.csv
 
+# Independent ESN final workstation summaries/plots (binaries hashed in FINAL_REPORT)
+!research/results/main_independent_esn/workstation_final/*.png
+!research/results/main_independent_esn/workstation_final/*.csv
+!research/results/main_independent_esn/workstation_final/*.json
+!research/results/main_independent_esn/workstation_final/*.md
+!research/results/main_independent_esn/workstation_final/*.txt
+research/results/main_independent_esn/workstation_final/run.log
+research/results/main_independent_esn/visited_round*.npz
+research/results/main_independent_esn/unitree_mujoco/
+
 # Step 5 / S2R runtime data (keep catalog + README)
 research/data/raw/*
 research/data/processed/*

@@ -1,0 +1,81 @@
+{
+  "schema": "workstation_audit_v1",
+  "created_utc": "2026-08-27T04:04:10.905892+00:00",
+  "host": "dxs4-DGX-Station",
+  "platform": "Linux-5.15.0-1108-oracle-x86_64-with-glibc2.35",
+  "python": "3.10.12",
+  "gpus": [
+    {
+      "index": "0",
+      "name": "Tesla V100-DGXS-32GB",
+      "memory_total": "32768 MiB",
+      "memory_used": "117 MiB",
+      "memory_free": "32367 MiB"
+    },
+    {
+      "index": "1",
+      "name": "Tesla V100-DGXS-32GB",
+      "memory_total": "32768 MiB",
+      "memory_used": "6 MiB",
+      "memory_free": "32486 MiB"
+    },
+    {
+      "index": "2",
+      "name": "Tesla V100-DGXS-32GB",
+      "memory_total": "32768 MiB",
+      "memory_used": "6 MiB",
+      "memory_free": "32486 MiB"
+    },
+    {
+      "index": "3",
+      "name": "Tesla V100-DGXS-32GB",
+      "memory_total": "32768 MiB",
+      "memory_used": "6 MiB",
+      "memory_free": "32486 MiB"
+    }
+  ],
+  "torch": "2.5.1+cu121",
+  "torch_cuda": "12.1",
+  "cuda_available": true,
+  "packages": {
+    "transformers": "4.49.0",
+    "flash_attn": "MISSING:ModuleNotFoundError",
+    "mujoco": "3.11.0",
+    "datasets": "5.0.1",
+    "numpy": "2.2.6",
+    "omegaconf": "2.3.1",
+    "qwen_vl_utils": "present",
+    "unifolm_vla": "present"
+  },
+  "hf_home": "/home/aihimekpen/.cache/huggingface",
+  "raid_hf_cache": "/raid/data/aihimekpen/hf_cache",
+  "mjcf": [
+    {
+      "path": "/home/aihimekpen/research_summer_2026/research/unitree_mujoco/unitree_robots/g1/g1_29dof.xml",
+      "exists": true
+    },
+    {
+      "path": "/home/aihimekpen/research/unitree_ros/robots/g1_description/g1_29dof.xml",
+      "exists": true
+    }
+  ],
+  "unifolm_checkpoints": [
+    {
+      "path": "/raid/data/aihimekpen/hf_cache/hub/models--unitreerobotics--UnifoLM-VLA-Base/snapshots/06fee5014922ba6791cfe48d1e4aefac995dd8a2/checkpoints/pytorch_model.pt",
+      "sha256": "3a82a5ce5494ce85a3c5dca1f381195520f0f60824aafbbbe56ccf8d39f21f33",
+      "bytes": 18982885927
+    }
+  ],
+  "visited_bundles": [
+    {
+      "path": "/home/aihimekpen/research_summer_2026/research/results/main_independent_esn/visited_ep0_seed0.npz",
+      "bytes": 170852,
+      "episode": 0,
+      "policy_seed": 0,
+      "anchors": 22,
+      "dagger_round": 0,
+      "policy_id": "bc_initializer_seed0"
+    }
+  ],
+  "note": "FlashAttention2 preferred; QWen2_5 falls back to SDPA when flash_attn is absent."
+}
